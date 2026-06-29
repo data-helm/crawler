@@ -86,7 +86,8 @@ use Illuminate\Console\Command;
  *   3. Edit the closure in handle() — disk, fields, model
  *
  * Image destination: $imageDisk + $imageFolder on this class (local, GCS, S3, …).
- * Image processing (resize, watermark, hash): blueprint JSON below.
+ * Image processing (resize, watermark, convert): fill in processImage() below —
+ * e.g. with Intervention Image. Off by default.
  *
  * Per-item logic lives in the closure inside handle().
  */
@@ -121,8 +122,6 @@ JSON;
         $blueprint = ScrapeBlueprint::fromJson(self::BLUEPRINT);
 
         $hashNames = $blueprint->hashNames;
-        $resize    = $blueprint->imageResize;
-        $watermark = $blueprint->watermark;
 
         $downloadImages = ! ($this->option('no-images'));
 
@@ -130,7 +129,7 @@ JSON;
         $this->crawlEach(
             $engine,
             $blueprint,
-            function (ScrapedItem $item) use ($images, $hashNames, $resize, $watermark, $downloadImages): void {
+            function (ScrapedItem $item) use ($images, $hashNames, $downloadImages): void {
                 $imagePath = null;
 
                 if ($downloadImages) {
@@ -140,13 +139,16 @@ JSON;
                         $imageUrl = $imageUrl[0] ?? null;
                     }
                     $imagePath = is_string($imageUrl) && $imageUrl !== ''
-                        ? $images->store($imageUrl, $this->imageDisk, $this->imageFolder, $hashNames, $resize, $watermark)
+                        ? $images->store($imageUrl, $this->imageDisk, $this->imageFolder, $hashNames)
                         : null;
+
+                    // Resize / watermark / convert the saved file (no-op by default).
+                    $this->processImage($imagePath);
 
                     // Every gallery image (uncomment to store all photos from "gallery_images"):
                     // foreach ((array) $item->get('gallery_images') as $url) {
                     //     if (is_string($url) && $url !== '') {
-                    //         $images->store($url, $this->imageDisk, $this->imageFolder, $hashNames, $resize, $watermark);
+                    //         $this->processImage($images->store($url, $this->imageDisk, $this->imageFolder, $hashNames));
                     //     }
                     // }
                 }
@@ -173,6 +175,33 @@ JSON;
         );
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Optional per-image processing hook — runs after each image is downloaded.
+     * Empty by default (images are stored as-is).
+     *
+     * To resize / watermark / convert, install Intervention Image and fill this in:
+     *
+     *   composer require intervention/image
+     *
+     *   use Intervention\Image\ImageManager;
+     *   use Intervention\Image\Drivers\Gd\Driver;
+     *   use Illuminate\Support\Facades\Storage;
+     *
+     *   $manager = new ImageManager(new Driver());
+     *   $image   = $manager->read(Storage::disk($this->imageDisk)->path($path));
+     *   $image->scaleDown(width: 800);                 // resize
+     *   // $image->place('storage/app/watermark.png', 'bottom-right', 10, 10);
+     *   Storage::disk($this->imageDisk)->put($path, (string) $image->encodeByExtension());
+     */
+    protected function processImage(?string $path): void
+    {
+        if ($path === null) {
+            return;
+        }
+
+        // No-op until you add image processing (see the docblock above).
     }
 }
 PHP;

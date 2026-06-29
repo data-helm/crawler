@@ -179,6 +179,31 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Upstream proxy (browser + flaresolverr transports)
+    |--------------------------------------------------------------------------
+    |
+    | Routes the self-hosted browser transports through an upstream proxy. The
+    | realistic way past IP-reputation blocks (Akamai, DataDome, PerimeterX) is a
+    | RESIDENTIAL or mobile proxy — a datacenter IP is flagged regardless of how
+    | good the browser fingerprint is.
+    |
+    | 'url' — full proxy URL, optionally with credentials:
+    |             http://user:pass@host:port   or   http://host:port
+    |
+    | Notes per transport:
+    |   • flaresolverr — native proxy support incl. user:pass auth.
+    |   • browser (browserless) — Chrome's --proxy-server ignores embedded
+    |     credentials, so auth is sent as a Proxy-Authorization header. The most
+    |     reliable setup for browserless is an IP-whitelisted proxy (no creds).
+    |
+    */
+
+    'proxy' => [
+        'url' => env('CRAWLER_PROXY_URL', ''),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Managed scraping API (transport = 'scraping_api')
     |--------------------------------------------------------------------------
     |

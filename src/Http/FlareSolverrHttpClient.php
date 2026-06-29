@@ -29,6 +29,7 @@ final class FlareSolverrHttpClient implements HttpClient, HttpRequester
         private readonly string $serviceUrl,
         private readonly int $maxTimeoutMs = 60000,
         ?HttpConfig $config = null,
+        private readonly string $proxyUrl = '',
     ) {
         $this->config = $config ?? new HttpConfig();
     }
@@ -86,6 +87,12 @@ final class FlareSolverrHttpClient implements HttpClient, HttpRequester
         $cookies = $this->cookiesPayload();
         if ($cookies !== []) {
             $payload['cookies'] = $cookies;
+        }
+
+        // FlareSolverr routes the solving browser through this proxy (with auth
+        // if the URL carries user:pass) — needed to beat IP-reputation blocks.
+        if ($this->proxyUrl !== '') {
+            $payload['proxy'] = ['url' => $this->proxyUrl];
         }
 
         $raw = (string) $client->post($endpoint, [

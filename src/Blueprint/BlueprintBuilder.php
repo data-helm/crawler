@@ -27,8 +27,6 @@ final class BlueprintBuilder
     private bool $hashNames = false;
     private string $imageDisk = 'storage';
     private ?string $imageFolder = null;
-    private ImageResizeConfig $imageResize;
-    private WatermarkConfig $watermark;
     private HttpConfig $httpConfig;
     private CrawlConfig $crawlConfig;
     private OutputConfig $outputConfig;
@@ -45,8 +43,6 @@ final class BlueprintBuilder
     public function __construct()
     {
         $this->pagination    = PaginationSelector::none();
-        $this->imageResize   = new ImageResizeConfig();
-        $this->watermark     = new WatermarkConfig();
         $this->httpConfig    = new HttpConfig();
         $this->crawlConfig   = new CrawlConfig();
         $this->outputConfig  = new OutputConfig();
@@ -180,20 +176,6 @@ final class BlueprintBuilder
         return $this;
     }
 
-    public function imageResize(ImageResizeConfig $config): self
-    {
-        $this->imageResize = $config;
-
-        return $this;
-    }
-
-    public function watermark(WatermarkConfig $config): self
-    {
-        $this->watermark = $config;
-
-        return $this;
-    }
-
     public function httpConfig(HttpConfig $config): self
     {
         $this->httpConfig = $config;
@@ -290,8 +272,6 @@ final class BlueprintBuilder
             hashNames:          $this->hashNames,
             imageDisk:       $this->imageDisk,
             imageFolder:     $this->imageFolder,
-            imageResize:     $this->imageResize,
-            watermark:       $this->watermark,
             httpConfig:      $this->httpConfig,
             crawlConfig:     $this->crawlConfig,
             outputConfig:    $this->outputConfig,

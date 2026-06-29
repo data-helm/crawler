@@ -5,7 +5,6 @@ namespace DataHelm\Crawler\Console;
 use DataHelm\Crawler\Blueprint\CrawlConfig;
 use DataHelm\Crawler\Blueprint\DedupConfig;
 use DataHelm\Crawler\Blueprint\HttpConfig;
-use DataHelm\Crawler\Blueprint\ImageResizeConfig;
 use DataHelm\Crawler\Blueprint\OutputConfig;
 use DataHelm\Crawler\Blueprint\ScrapeBlueprint;
 use DataHelm\Crawler\Blueprint\SearchFilter;
@@ -34,7 +33,6 @@ use Symfony\Component\Console\Output\OutputInterface;
  *   php artisan datahelm:scrap:generate <url> --robot-name=MegaLeiloes
  *   php artisan datahelm:scrap:generate <url> --json
  *   php artisan datahelm:scrap:generate <url> --blueprint
- *   php artisan datahelm:scrap:generate <url> --resize --resize-width=800 --resize-height=600 --resize-fit=cover
  */
 class GenerateBlueprintCommand extends Command
 {
@@ -48,13 +46,6 @@ class GenerateBlueprintCommand extends Command
         {--get-primary-image=false : Put only the primary (most relevant) image URL per item into primary_image in the JSON (true/false)}
         {--get-gallery-images=false : Detect the detail-page gallery and put its image URLs into gallery_images in the JSON (implies --get-detail) (true/false)}
         {--hash-names=false : Rename stored images to a unique content hash (true/false)}
-        {--resize : Enable image resizing after download}
-        {--resize-width= : Target width in pixels (omit to scale proportionally by height only)}
-        {--resize-height= : Target height in pixels (omit to scale proportionally by width only)}
-        {--resize-fit=contain : How to handle aspect ratio: contain, cover, stretch, max}
-        {--resize-quality=85 : JPEG/WebP quality 1–100 (PNG compression is derived automatically)}
-        {--resize-format= : Convert to format: jpg, png, webp, gif (omit to keep original format)}
-        {--resize-background=#ffffff : Background fill colour for contain mode (hex, e.g. #ffffff)}
         {--http-delay= : Milliseconds to wait between page requests (default: config crawler.http.delay_ms)}
         {--http-timeout=60 : HTTP request timeout in seconds}
         {--http-retries=3 : Retry count on transient request failures}
@@ -125,16 +116,6 @@ class GenerateBlueprintCommand extends Command
             : $baseUrl;
         $name = $this->robotName($baseUrl);
 
-        $resizeConfig = new ImageResizeConfig(
-            enabled:    (bool) $this->option('resize'),
-            width:      $this->option('resize-width')  !== null ? (int) $this->option('resize-width')  : null,
-            height:     $this->option('resize-height') !== null ? (int) $this->option('resize-height') : null,
-            fit:        (string) ($this->option('resize-fit') ?? 'contain'),
-            quality:    (int) ($this->option('resize-quality') ?? 85),
-            format:     $this->option('resize-format') !== null && $this->option('resize-format') !== '' ? (string) $this->option('resize-format') : null,
-            background: (string) ($this->option('resize-background') ?? '#ffffff'),
-        );
-
         $httpConfig = new HttpConfig(
             timeout:    (int) ($this->option('http-timeout') ?? 60),
             delayMs:    $this->configDelayMs('http-delay', 'crawler.http.delay_ms'),
@@ -193,7 +174,6 @@ class GenerateBlueprintCommand extends Command
             getPrimaryImage:   filter_var($this->option('get-primary-image'), FILTER_VALIDATE_BOOLEAN),
             getGalleryImages:  $getGalleryImages,
             hashNames:         filter_var($this->option('hash-names'), FILTER_VALIDATE_BOOLEAN),
-            imageResize: $resizeConfig,
             httpConfig:  $httpConfig,
             crawlConfig: $crawlConfig,
             outputConfig: $outputConfig,
@@ -504,7 +484,14 @@ class GenerateBlueprintCommand extends Command
     {
         $custom = $this->option('robot-name');
         if (is_string($custom) && $custom !== '') {
-            return Str::studly($custom);
+            // Str::studly only treats - and _ as word separators, so dots/spaces
+            // in a custom name (e.g. "zalando.at") would survive into an invalid
+            // PHP class name like "Zalando.at". Normalise every non-alphanumeric
+            // run to _ first so it studlies cleanly → "ZalandoAt".
+            $name = Str::studly((string) preg_replace('/[^A-Za-z0-9]+/', '_', $custom));
+
+            // A class name can't be empty or start with a digit.
+            return $name !== '' && ! ctype_digit($name[0]) ? $name : 'Site' . $name;
         }
 
         $host = preg_replace('/^www\./', '', Url::host($url));

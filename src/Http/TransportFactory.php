@@ -38,6 +38,8 @@ final class TransportFactory
             'flaresolverr' => new FlareSolverrHttpClient(
                 (string) config('crawler.flaresolverr.url', 'http://flaresolverr:8191'),
                 (int) config('crawler.flaresolverr.max_timeout', 60000),
+                null,
+                (string) config('crawler.proxy.url', ''),
             ),
             'scraping_api' => new ScrapingApiHttpClient(
                 (string) config('crawler.scraping_api.url', ''),
@@ -95,6 +97,7 @@ final class TransportFactory
         return new BrowserlessHttpClient(
             (string) config('crawler.browser.url', 'http://browserless:3000'),
             config('crawler.browser.token') !== null ? (string) config('crawler.browser.token') : null,
+            (string) config('crawler.proxy.url', ''),
         );
     }
 }

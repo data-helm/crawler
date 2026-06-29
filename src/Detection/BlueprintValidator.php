@@ -43,7 +43,6 @@ final class BlueprintValidator
         $this->checkPagination($blueprint);
         $this->checkItemSchema($blueprint);
         $this->checkPipelineNames($blueprint);
-        $this->checkImages($blueprint);
         $this->checkRenderJs($blueprint);
 
         return $this->errors === [];
@@ -192,19 +191,6 @@ final class BlueprintValidator
         foreach ($blueprint->pipelineNames as $name) {
             if (! isset($registry[$name])) {
                 $this->warnings[] = "pipeline_names: '{$name}' not found in config('crawler.pipeline_registry') — will be skipped at runtime";
-            }
-        }
-    }
-
-    private function checkImages(ScrapeBlueprint $blueprint): void
-    {
-        if (! $blueprint->getAllImages && ! $blueprint->getPrimaryImage && ! $blueprint->getGalleryImages) {
-            return;
-        }
-
-        if ($blueprint->imageResize->enabled) {
-            if ($blueprint->imageResize->width === null && $blueprint->imageResize->height === null) {
-                $this->warnings[] = 'image_resize.enabled = true but neither width nor height is set — images will not be resized';
             }
         }
     }

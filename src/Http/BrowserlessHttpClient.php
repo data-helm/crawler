@@ -24,6 +24,7 @@ final class BrowserlessHttpClient extends BrowserHttpClient
     public function __construct(
         private readonly string $serviceUrl,
         private readonly ?string $token = null,
+        private readonly string $proxyUrl = '',
     ) {
         parent::__construct();
     }
@@ -31,8 +32,19 @@ final class BrowserlessHttpClient extends BrowserHttpClient
     protected function renderPage(string $url): string
     {
         $endpoint = rtrim($this->serviceUrl, '/') . '/content';
+
+        $query = [];
         if ($this->token !== null && $this->token !== '') {
-            $endpoint .= '?token=' . urlencode($this->token);
+            $query['token'] = $this->token;
+        }
+        // Chrome's --proxy-server ignores embedded credentials, so pass only the
+        // scheme://host:port here; any user:pass is sent as a header below.
+        $proxyServer = $this->proxyServer();
+        if ($proxyServer !== '') {
+            $query['--proxy-server'] = $proxyServer;
+        }
+        if ($query !== []) {
+            $endpoint .= '?' . http_build_query($query);
         }
 
         // browserless honours its own navigation timeout; give the HTTP call a
@@ -55,6 +67,10 @@ final class BrowserlessHttpClient extends BrowserHttpClient
         }
 
         $extraHeaders = $this->config->headers;
+        $proxyAuth = $this->proxyAuthorization();
+        if ($proxyAuth !== '') {
+            $extraHeaders['Proxy-Authorization'] = $proxyAuth;
+        }
         if ($extraHeaders !== []) {
             $payload['setExtraHTTPHeaders'] = $extraHeaders;
         }
@@ -104,6 +120,50 @@ final class BrowserlessHttpClient extends BrowserHttpClient
             ['domcontentloaded', 'load', 'networkidle', 'networkidle0', 'networkidle2'],
             true,
         );
+    }
+
+    /**
+     * scheme://host:port for Chrome's --proxy-server flag, with any credentials
+     * stripped (Chrome ignores them there — see {@see proxyAuthorization()}).
+     */
+    private function proxyServer(): string
+    {
+        if ($this->proxyUrl === '') {
+            return '';
+        }
+
+        $parts = parse_url($this->proxyUrl);
+        if (! isset($parts['host'])) {
+            return '';
+        }
+
+        $scheme = $parts['scheme'] ?? 'http';
+        $server = $scheme . '://' . $parts['host'];
+        if (isset($parts['port'])) {
+            $server .= ':' . $parts['port'];
+        }
+
+        return $server;
+    }
+
+    /**
+     * "Basic <base64>" header value for an authenticated proxy, or '' when the
+     * proxy URL carries no credentials.
+     */
+    private function proxyAuthorization(): string
+    {
+        if ($this->proxyUrl === '') {
+            return '';
+        }
+
+        $parts = parse_url($this->proxyUrl);
+        if (! isset($parts['user'])) {
+            return '';
+        }
+
+        $credentials = $parts['user'] . ':' . ($parts['pass'] ?? '');
+
+        return 'Basic ' . base64_encode($credentials);
     }
 
     /**

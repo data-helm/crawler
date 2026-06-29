@@ -9,7 +9,6 @@ use DataHelm\Crawler\Blueprint\CrawlMode;
 use DataHelm\Crawler\Blueprint\DedupConfig;
 use DataHelm\Crawler\Blueprint\FieldSelector;
 use DataHelm\Crawler\Blueprint\HttpConfig;
-use DataHelm\Crawler\Blueprint\ImageResizeConfig;
 use DataHelm\Crawler\Blueprint\InfiniteScrollConfig;
 use DataHelm\Crawler\Blueprint\OutputConfig;
 use DataHelm\Crawler\Blueprint\PaginationStrategy;
@@ -104,7 +103,6 @@ final class BlueprintGenerator
         bool $getGalleryImages = false,
         bool $hashNames = false,
         string $imageDisk = 'storage',
-        ImageResizeConfig $imageResize = new ImageResizeConfig(),
         HttpConfig $httpConfig = new HttpConfig(),
         CrawlConfig $crawlConfig = new CrawlConfig(),
         OutputConfig $outputConfig = new OutputConfig(),
@@ -156,7 +154,6 @@ final class BlueprintGenerator
                 $getGalleryImages,
                 $hashNames,
                 $imageDisk,
-                $imageResize,
                 $httpConfig,
                 $crawlConfig,
                 $outputConfig,
@@ -213,7 +210,6 @@ final class BlueprintGenerator
             ->hashNames($hashNames)
             ->imageDisk($imageDisk)
             ->imageFolder($imageFolder)
-            ->imageResize($imageResize)
             ->httpConfig($httpConfig)
             ->crawlConfig($crawlConfig)
             ->outputConfig($outputConfig)
@@ -410,7 +406,6 @@ final class BlueprintGenerator
         bool $getGalleryImages,
         bool $hashNames,
         string $imageDisk,
-        ImageResizeConfig $imageResize,
         HttpConfig $httpConfig,
         CrawlConfig $crawlConfig,
         OutputConfig $outputConfig,
@@ -490,7 +485,6 @@ final class BlueprintGenerator
                 $getGalleryImages,
                 $hashNames,
                 $imageDisk,
-                $imageResize,
                 $httpConfig,
                 $crawlConfig,
                 $outputConfig,
@@ -517,7 +511,6 @@ final class BlueprintGenerator
                 $getGalleryImages,
                 $hashNames,
                 $imageDisk,
-                $imageResize,
                 $httpConfig,
                 $crawlConfig,
                 $outputConfig,
@@ -545,7 +538,6 @@ final class BlueprintGenerator
         bool $getGalleryImages,
         bool $hashNames,
         string $imageDisk,
-        ImageResizeConfig $imageResize,
         HttpConfig $httpConfig,
         CrawlConfig $crawlConfig,
         OutputConfig $outputConfig,
@@ -584,7 +576,6 @@ final class BlueprintGenerator
             ->hashNames($hashNames)
             ->imageDisk($imageDisk)
             ->imageFolder($imageFolder)
-            ->imageResize($imageResize)
             ->httpConfig($httpConfig)
             ->crawlConfig($crawlConfig)
             ->outputConfig($outputConfig)
