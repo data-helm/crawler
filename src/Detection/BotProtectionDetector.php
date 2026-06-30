@@ -26,7 +26,7 @@ final class BotProtectionDetector
     private const VENDOR_SIGNATURES = [
         'Akamai Bot Manager'        => ['akamaighost', 'errors.edgesuite.net', 'akamai reference', 'ak_bmsc', 'akamai.com/site', 'akamai-logo', '_abck', 'bm-verify', 'bm_sz'],
         'Cloudflare'                => ['cloudflare', 'cf-ray', 'attention required', 'just a moment', 'cf-chl', 'cf_chl'],
-        'PerimeterX / HUMAN'        => ['perimeterx', 'px-captcha', '_pxhd', 'human challenge'],
+        'PerimeterX / HUMAN'        => ['perimeterx', 'px-captcha', '_pxhd', 'human challenge', 'access to this page has been denied'],
         'DataDome'                  => ['datadome', 'dd-captcha'],
         'Imperva / Incapsula'       => ['incapsula', '_incapsula_resource', 'imperva'],
         'AWS WAF'                    => ['awswaf', 'aws waf'],

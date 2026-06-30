@@ -65,6 +65,24 @@ final class VtexDetector
         ];
     }
 
+    /**
+     * Extra detail fields (used when --get-detail is on). VTEX's search response
+     * is already a full product document, so these come from the *same* record —
+     * no second request, no detail page. Merged into the main fields.
+     *
+     * @return array<string,string> field name => json path
+     */
+    public function detailFields(): array
+    {
+        return [
+            'description' => 'description',
+            'brand'       => 'brand',
+            'reference'   => 'productReference',
+            'list_price'  => 'items.0.sellers.0.commertialOffer.ListPrice',
+            'available'   => 'items.0.sellers.0.commertialOffer.AvailableQuantity',
+        ];
+    }
+
     private function base(string $url): string
     {
         $parts  = parse_url($url);

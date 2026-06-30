@@ -54,6 +54,28 @@ final class HttpConfig
         return new self();
     }
 
+    /**
+     * Clone with JS rendering toggled (and, optionally, a transport pinned).
+     * Lets the generator promote a config to headless-browser rendering after it
+     * discovers the page is a SPA, without rebuilding every field by hand.
+     */
+    public function withRenderJs(bool $renderJs = true, ?string $transport = null): self
+    {
+        return new self(
+            timeout:        $this->timeout,
+            delayMs:        $this->delayMs,
+            retryCount:     $this->retryCount,
+            retryDelayMs:   $this->retryDelayMs,
+            userAgent:      $this->userAgent,
+            headers:        $this->headers,
+            proxies:        $this->proxies,
+            cookies:        $this->cookies,
+            renderJs:       $renderJs,
+            browserWaitFor: $this->browserWaitFor,
+            transport:      $transport ?? $this->transport,
+        );
+    }
+
     public static function fromArray(array $data): self
     {
         return new self(

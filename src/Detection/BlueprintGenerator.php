@@ -133,6 +133,7 @@ final class BlueprintGenerator
         if ($apiEndpoint === null && $this->vtexDetector->looksLikeVtex($html)) {
             return $this->buildVtexBlueprint(
                 $url,
+                $withDetail,
                 $maxPages,
                 $getAllImages,
                 $getPrimaryImage,
@@ -158,6 +159,45 @@ final class BlueprintGenerator
             $this->notes[] = 'The only repeating list in the static HTML looks like navigation, '
                 . 'not content — treating this page as JavaScript/AJAX-rendered.';
             $list = null;
+        }
+
+        // SPA recovery: the static HTML had no usable list and the page looks like
+        // a JS-rendered SPA. When we're on the self-escalating 'auto' transport with
+        // a headless browser available, re-fetch the page rendered (JS executed) and
+        // retry list detection before giving up to API mode. Server-rendered-on-
+        // hydrate stores (SFCC, many Next/Nuxt sites) expose their product grid only
+        // after JS runs, so this makes `--transport=auto` handle them with no manual
+        // `--render-js`. Persists render_js + the browser transport into the robot.
+        if (
+            $list === null
+            && $apiEndpoint === null
+            && ! $httpConfig->renderJs
+            && $this->http instanceof AutoHttpClient
+            && $this->http->canRenderJs()
+            && ($looksLikeSpa || $this->spaDetector->isSpa($html, $this->visibleTextLength($page)))
+        ) {
+            try {
+                $renderedHtml = $this->http->fetchRendered($url);
+                $this->mergeTransportNotes();
+
+                $renderedPage = Page::fromHtml($url, $renderedHtml);
+                $renderedList = $this->listDetector->detect($renderedPage);
+
+                if ($renderedList !== null && $this->looksLikeRealList($renderedPage, $renderedList, $renderedHtml)) {
+                    $this->notes[] = 'Headless re-render exposed a real content list — '
+                        . 'building an HTML-mode robot (render_js baked in).';
+                    $html       = $renderedHtml;
+                    $page       = $renderedPage;
+                    $list       = $renderedList;
+                    $httpConfig = $httpConfig->withRenderJs(true);
+                } else {
+                    $this->notes[] = 'Headless re-render still showed no content list — '
+                        . 'falling back to API-mode detection.';
+                }
+            } catch (\Throwable $e) {
+                $this->notes[] = 'Headless re-render failed (' . $e->getMessage()
+                    . ') — falling back to API-mode detection.';
+            }
         }
 
         // No HTML list (or API explicitly requested) → try JSON/API mode.
@@ -434,8 +474,7 @@ final class BlueprintGenerator
         DedupConfig $dedup,
         ?string $imageFolder,
     ): ?ScrapeBlueprint {
-        $visibleText = trim($page->crawler()->filter('body')->count() > 0 ? $page->crawler()->filter('body')->text('', true) : '');
-        if ($this->spaDetector->isSpa($html, strlen($visibleText))) {
+        if ($this->spaDetector->isSpa($html, $this->visibleTextLength($page))) {
             $this->notes[] = 'Detected a JavaScript SPA — switching to API mode.';
         }
 
@@ -552,6 +591,7 @@ final class BlueprintGenerator
      */
     private function buildVtexBlueprint(
         string $url,
+        bool $withDetail,
         int $maxPages,
         bool $getAllImages,
         bool $getPrimaryImage,
@@ -566,6 +606,18 @@ final class BlueprintGenerator
     ): ScrapeBlueprint {
         $this->notes[] = 'Detected a VTEX store — using the catalog_system product search API '
             . '({search} is filled per category by search_filters).';
+
+        // VTEX's search response is already a full product document, so --get-detail
+        // enriches the SAME record (description, brand, price, stock, …) rather than
+        // making a second request. There is no separate detail page to scrape.
+        $fields = $withDetail
+            ? array_merge($this->vtexDetector->fields(), $this->vtexDetector->detailFields())
+            : $this->vtexDetector->fields();
+
+        if ($withDetail) {
+            $this->notes[] = 'VTEX returns full product detail in one call — --get-detail adds '
+                . 'detail fields (description, brand, list_price, available) to each item, no second request.';
+        }
 
         $api = new ApiConfig(
             endpoint:      $this->vtexDetector->searchEndpoint($url),
@@ -595,7 +647,7 @@ final class BlueprintGenerator
             ->outputConfig($outputConfig)
             ->dedup($dedup);
 
-        foreach ($this->vtexDetector->fields() as $name => $path) {
+        foreach ($fields as $name => $path) {
             $builder->addField(new FieldSelector(name: $name, css: $path, type: 'json'));
         }
 
@@ -789,6 +841,14 @@ final class BlueprintGenerator
         // No images anywhere in the matched list. Only trust an image-less list on
         // largely static pages; on script-heavy pages it is almost certainly chrome.
         return substr_count(strtolower($html), '<script') < 3;
+    }
+
+    /** Length of the page's visible body text — the SPA detector's "is there content?" signal. */
+    private function visibleTextLength(Page $page): int
+    {
+        $body = $page->crawler()->filter('body');
+
+        return $body->count() > 0 ? strlen(trim($body->text('', true))) : 0;
     }
 
     /**

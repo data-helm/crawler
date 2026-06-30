@@ -59,6 +59,28 @@ final class AutoHttpClient implements HttpClient, HttpRequester
         return $this->notes;
     }
 
+    /** True when a JS-rendering (headless browser) transport is in the ladder. */
+    public function canRenderJs(): bool
+    {
+        return in_array('browser', $this->ladder, true);
+    }
+
+    /**
+     * Force one fetch through the headless-browser transport with JS rendering on,
+     * bypassing the escalate-only-on-block logic. Unlike {@see get()}, this is
+     * driven by content emptiness (a SPA whose static HTML carries no data), not
+     * by an anti-bot block — the caller decides it needs a rendered DOM. Records
+     * 'browser' as the resolved transport so it gets baked into the blueprint.
+     */
+    public function fetchRendered(string $url): string
+    {
+        $html = $this->factory->make('browser', $this->config->withRenderJs(true))->get($url);
+        $this->resolved = 'browser';
+        $this->notes[]  = "Re-fetched through 'browser' with JS rendering for SPA content.";
+
+        return $html;
+    }
+
     public function get(string $url): string
     {
         return $this->run($url, fn (HttpClient $client) => $client->get($url));
