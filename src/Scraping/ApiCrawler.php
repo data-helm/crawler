@@ -20,6 +20,12 @@ use DataHelm\Crawler\Pipeline\ItemPipeline;
  * Pagination uses an incrementing page parameter injected into the query string
  * (or the request body when `page_in_body` is set), stopping when a page returns
  * no items, the total count is reached, or max_pages / limit is hit.
+ *
+ * Multiple categories: like the HTML engine, an API robot can carry
+ * `search_filters`. Each filter substitutes its `url_sufix` into the endpoint
+ * (replacing a `{search}` placeholder, or appended to the path), tags every item
+ * from it, and applies its own per-filter limit. Dedup and the global limit are
+ * shared across all of them.
  */
 final class ApiCrawler
 {
@@ -65,16 +71,133 @@ final class ApiCrawler
         $seenKeys  = [];
         $streaming = $onItem !== null && $blueprint->outputConfig->stream;
 
+        // Each search_filter is a "source" (its own endpoint, tags and limit). With
+        // no filters there is a single source: the endpoint as-is. Dedup, the item
+        // list and the global limit are shared across sources.
+        foreach ($this->buildSources($blueprint, $api) as $source) {
+            $reachedGlobalLimit = $this->crawlSource(
+                $blueprint,
+                $api,
+                $source,
+                $extractor,
+                $detailExtractor,
+                $effectiveLimit,
+                $streaming,
+                $onPage,
+                $onItem,
+                $items,
+                $seenKeys,
+                $stats,
+            );
+
+            if ($reachedGlobalLimit) {
+                break;
+            }
+        }
+
+        $stats->finish();
+
+        return $streaming ? [] : $blueprint->outputConfig->applyToItems($items);
+    }
+
+    public function getLastStats(): ?CrawlStats
+    {
+        return $this->lastStats;
+    }
+
+    // -------------------------------------------------------------------------
+
+    /**
+     * Resolve the endpoints to crawl. In API mode each search_filter becomes a
+     * source: its url_sufix is spliced into the endpoint, its meta tags are
+     * stamped on every item, and its limit caps that source. No search_filters →
+     * a single source (the endpoint, no tags, no per-source limit).
+     *
+     * @return list<array{endpoint:string,tags:array<string,scalar>,limit:int}>
+     */
+    private function buildSources(ScrapeBlueprint $blueprint, ApiConfig $api): array
+    {
+        if ($blueprint->searchFilters === []) {
+            return [['endpoint' => $api->endpoint, 'tags' => [], 'limit' => 0]];
+        }
+
+        $sources = [];
+        foreach ($blueprint->searchFilters as $filter) {
+            $sources[] = [
+                'endpoint' => $this->applySearch($api->endpoint, $filter->urlSuffix),
+                'tags'     => $filter->meta,
+                'limit'    => $filter->limit,
+            ];
+        }
+
+        return $sources;
+    }
+
+    /**
+     * Splice a search_filter suffix into the endpoint: replace a `{search}`
+     * placeholder if present, otherwise append it to the path before any query
+     * string — so ".../products/search?_from=0" + "men/shirts" becomes
+     * ".../products/search/men/shirts?_from=0".
+     */
+    private function applySearch(string $endpoint, string $suffix): string
+    {
+        $suffix = trim($suffix);
+        if ($suffix === '') {
+            return $endpoint;
+        }
+
+        if (str_contains($endpoint, '{search}')) {
+            return str_replace('{search}', trim($suffix, '/'), $endpoint);
+        }
+
+        [$path, $queryString] = array_pad(explode('?', $endpoint, 2), 2, null);
+        $path = rtrim($path, '/') . '/' . ltrim($suffix, '/');
+
+        return $queryString === null ? $path : $path . '?' . $queryString;
+    }
+
+    /**
+     * Crawl one source (endpoint) to exhaustion, its per-source limit, or the
+     * global limit — sharing the dedup set, item list and stats with the others.
+     *
+     * @param array{endpoint:string,tags:array<string,scalar>,limit:int} $source
+     * @param (callable(string):void)|null     $onPage
+     * @param (callable(ScrapedItem):void)|null $onItem
+     * @param list<ScrapedItem>  $items
+     * @param array<string,bool> $seenKeys
+     *
+     * @return bool True when the GLOBAL limit was reached (stop all sources).
+     */
+    private function crawlSource(
+        ScrapeBlueprint $blueprint,
+        ApiConfig $api,
+        array $source,
+        JsonItemExtractor $extractor,
+        ?JsonItemExtractor $detailExtractor,
+        int $effectiveLimit,
+        bool $streaming,
+        ?callable $onPage,
+        ?callable $onItem,
+        array &$items,
+        array &$seenKeys,
+        CrawlStats $stats,
+    ): bool {
+        $endpoint      = $source['endpoint'];
+        $tags          = $source['tags'];
+        $sourceLimit   = $source['limit'];
+        $sourceScraped = 0;
+
         $page  = $api->startPage;
         $pages = 0;
         $total = null;
+        $lastSignature = null;
 
         while (PageCap::allowsMore($pages, $blueprint->maxPages)) {
             if ($blueprint->httpConfig->delayMs > 0) {
                 usleep($blueprint->httpConfig->delayMs * 1000);
             }
 
-            [$url, $body, $query] = $this->buildRequestParts($api, $page);
+            [$url, $body, $query] = $this->buildRequestParts($api, $page, $endpoint);
 
             if ($onPage !== null) {
                 $onPage($url);
@@ -112,12 +235,37 @@ final class ApiCrawler
                 break;
             }
 
+            // Identical-payload guard (prevents infinite loops). If this page's
+            // records are byte-identical to the previous page's, the endpoint is
+            // ignoring the page param and returning the same data every call —
+            // e.g. a wrong endpoint was detected (a cart/orderForm rather than a
+            // product list). Stop instead of fetching the same page forever.
+            $signature = md5((string) json_encode($records));
+            if ($signature === $lastSignature) {
+                fwrite(STDERR, sprintf(
+                    'API: page %d returned the same payload as the previous page — stopping '
+                    . '(the endpoint likely ignores pagination; check api.endpoint / items_path).'
+                    . PHP_EOL,
+                    $pages,
+                ));
+                break;
+            }
+            $lastSignature = $signature;
+
+            $scrapedBefore = $stats->itemsScraped;
+            $dedupedBefore = $stats->itemsDeduped;
+
             foreach ($records as $record) {
                 if (! is_array($record)) {
                     continue;
                 }
 
                 $item = $extractor->extract($record);
+
+                // Stamp this source's tags (e.g. category) onto every item.
+                foreach ($tags as $tagKey => $tagValue) {
+                    $item->set($tagKey, $tagValue);
+                }
 
                 if ($detailExtractor !== null && $api->detail->enabled) {
                     $this->mergeDetail($item, $api->detail, $detailExtractor, $stats);
@@ -146,6 +294,7 @@ final class ApiCrawler
                 }
 
                 $stats->itemsScraped++;
+                $sourceScraped++;
 
                 if ($streaming) {
                     $onItem($item);
@@ -157,10 +306,15 @@ final class ApiCrawler
                     usleep($blueprint->crawlConfig->delayBetweenItemsMs * 1000);
                 }
 
+                // Global cap (--limit / max_items): stop the whole crawl.
                 if ($effectiveLimit > 0 && $stats->itemsScraped >= $effectiveLimit) {
-                    $stats->finish();
+                    return true;
+                }
 
-                    return $streaming ? [] : $blueprint->outputConfig->applyToItems($items);
+                // Per-source cap (search_filter limit): this source is done, move
+                // on to the next category.
+                if ($sourceLimit > 0 && $sourceScraped >= $sourceLimit) {
+                    break 2;
                 }
             }
 
@@ -168,9 +322,22 @@ final class ApiCrawler
             $page++;
 
             // No pagination configured → single request only.
-            $usesPathPagination = str_contains($api->endpoint, '{page}')
-                || str_contains($api->endpoint, '{page_size}');
+            $usesPathPagination = str_contains($endpoint, '{page}')
+                || str_contains($endpoint, '{page_size}');
             if ($api->pageParam === null && ! $usesPathPagination) {
+                break;
+            }
+
+            // All-duplicates guard (prevents infinite loops). If a page produced no
+            // new items *because* every record was a duplicate of one already seen,
+            // pagination is repeating data — stop. Scoped to dedup (not user
+            // filters), so a page emptied only by filters can still page forward.
+            if ($stats->itemsScraped === $scrapedBefore && $stats->itemsDeduped > $dedupedBefore) {
+                fwrite(STDERR, sprintf(
+                    'API: page %d contained only already-seen items — stopping (end of data '
+                    . 'or the endpoint is repeating pages).' . PHP_EOL,
+                    $pages - 1,
+                ));
                 break;
             }
 
@@ -184,28 +351,19 @@ final class ApiCrawler
             }
         }
 
-        $stats->finish();
-
-        return $streaming ? [] : $blueprint->outputConfig->applyToItems($items);
+        return false;
     }
-
-    public function getLastStats(): ?CrawlStats
-    {
-        return $this->lastStats;
-    }
-
-    // -------------------------------------------------------------------------
 
     /**
      * Builds the per-page URL, body and query, injecting pagination params.
      *
      * @return array{0:string,1:?string,2:array<string,scalar>}
      */
-    private function buildRequestParts(ApiConfig $api, int $page): array
+    private function buildRequestParts(ApiConfig $api, int $page, string $endpoint): array
     {
         $query = $api->query;
         $body  = $api->body;
-        $url   = $api->endpoint;
+        $url   = $endpoint;
 
         // Path-based pagination: .../GetLotes/{page}/{page_size}
         if (str_contains($url, '{page}') || str_contains($url, '{page_size}')) {

@@ -74,6 +74,22 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Images
+    |--------------------------------------------------------------------------
+    |
+    | Default filesystem disk a generated robot downloads images to ('storage'
+    | and 'local' write under storage/app; 'public' under storage/app/public, web
+    | accessible after `php artisan storage:link'; or any cloud disk: s3, gcs, …).
+    | Override per run with --image-disk. Robots can still edit $imageDisk by hand.
+    |
+    */
+
+    'images' => [
+        'disk' => env('CRAWLER_IMAGE_DISK', 'storage'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Crawl timing defaults
     |--------------------------------------------------------------------------
     |

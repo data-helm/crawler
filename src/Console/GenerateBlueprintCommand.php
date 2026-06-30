@@ -46,6 +46,7 @@ class GenerateBlueprintCommand extends Command
         {--get-primary-image=false : Put only the primary (most relevant) image URL per item into primary_image in the JSON (true/false)}
         {--get-gallery-images=false : Detect the detail-page gallery and put its image URLs into gallery_images in the JSON (implies --get-detail) (true/false)}
         {--hash-names=false : Rename stored images to a unique content hash (true/false)}
+        {--image-disk= : Filesystem disk for downloaded images: storage, public, s3, … (default config crawler.images.disk)}
         {--http-delay= : Milliseconds to wait between page requests (default: config crawler.http.delay_ms)}
         {--http-timeout=60 : HTTP request timeout in seconds}
         {--http-retries=3 : Retry count on transient request failures}
@@ -132,10 +133,29 @@ class GenerateBlueprintCommand extends Command
                             : null,
         );
 
+        // max_items: respect an explicit --max-items; otherwise derive a safety
+        // ceiling from the per-category limits (sum × 2). Unlike search_filters.limit
+        // (HTML-only), max_items is honoured in BOTH HTML and API mode, so this caps
+        // a misbehaving endpoint/pagination from massively overshooting the volume
+        // asked for. The ×2 headroom means it only bites on runaway, not normal runs.
+        $explicitMaxItems = (int) ($this->option('max-items') ?? 0);
+        $maxItemsCap      = $explicitMaxItems;
+        $autoMaxItems     = false;
+        if ($explicitMaxItems === 0) {
+            $limitSum = array_sum(array_map(
+                static fn (array $f): int => (int) ($f['limit'] ?? 0),
+                $searchFilters,
+            ));
+            if ($limitSum > 0) {
+                $maxItemsCap  = $limitSum * 2;
+                $autoMaxItems = true;
+            }
+        }
+
         $crawlConfig = new CrawlConfig(
             delayBetweenPagesMs: $this->configDelayMs('page-delay', 'crawler.crawl.delay_between_pages_ms'),
             delayBetweenItemsMs: $this->configDelayMs('item-delay', 'crawler.crawl.delay_between_items_ms'),
-            maxItems:            (int) ($this->option('max-items') ?? 0),
+            maxItems:            $maxItemsCap,
         );
 
         $outputConfig = new OutputConfig(
@@ -174,6 +194,7 @@ class GenerateBlueprintCommand extends Command
             getPrimaryImage:   filter_var($this->option('get-primary-image'), FILTER_VALIDATE_BOOLEAN),
             getGalleryImages:  $getGalleryImages,
             hashNames:         filter_var($this->option('hash-names'), FILTER_VALIDATE_BOOLEAN),
+            imageDisk:   (string) ($this->option('image-disk') ?: config('crawler.images.disk', 'storage')),
             httpConfig:  $httpConfig,
             crawlConfig: $crawlConfig,
             outputConfig: $outputConfig,
@@ -253,6 +274,9 @@ class GenerateBlueprintCommand extends Command
             $data['search_filters'] = $searchFilters;
             $blueprint = ScrapeBlueprint::fromArray($data);
             $this->line('<fg=cyan>·</> Crawling ' . count($searchFilters) . ' search filter(s) (baked into the robot).');
+            if ($autoMaxItems) {
+                $this->line("<fg=cyan>·</> Safety cap: max_items = {$maxItemsCap} (2× the per-category limits; applies in HTML and API mode).");
+            }
         }
 
         // Apply flags that are not threaded through the generator itself.

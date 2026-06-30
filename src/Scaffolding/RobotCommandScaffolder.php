@@ -49,6 +49,7 @@ final class RobotCommandScaffolder
             '{{CLASS}}'          => $class,
             '{{NAME}}'           => strtolower($name),
             '{{HOST}}'           => $host,
+            '{{IMAGE_DISK}}'     => $blueprint->imageDisk,
             '{{SIGNATURE}}'      => $this->commandPrefix . ':robot:' . strtolower($name),
             '{{COMMAND_PREFIX}}' => $this->commandPrefix,
             '{{DESCRIPTION}}'    => "Scrape {$host} using a baked-in blueprint",
@@ -86,8 +87,7 @@ use Illuminate\Console\Command;
  *   3. Edit the closure in handle() — disk, fields, model
  *
  * Image destination: $imageDisk + $imageFolder on this class (local, GCS, S3, …).
- * Image processing (resize, watermark, convert): fill in processImage() below —
- * e.g. with Intervention Image. Off by default.
+ * Image processing (resize, watermark): optional — uncomment processImage() below.
  *
  * Per-item logic lives in the closure inside handle().
  */
@@ -107,7 +107,7 @@ class {{CLASS}} extends Command
     // Image destination — any disk in config/filesystems.php ('storage', 'gcs', …)
     // -------------------------------------------------------------------------
 
-    protected string $imageDisk = 'storage';
+    protected string $imageDisk = '{{IMAGE_DISK}}';
 
     protected string $imageFolder = 'scrapes/images/{{HOST}}';
 
@@ -142,7 +142,7 @@ JSON;
                         ? $images->store($imageUrl, $this->imageDisk, $this->imageFolder, $hashNames)
                         : null;
 
-                    // Resize / watermark / convert the saved file (no-op by default).
+                    // Optional resize / watermark — uncomment inside processImage().
                     $this->processImage($imagePath);
 
                     // Every gallery image (uncomment to store all photos from "gallery_images"):
@@ -178,22 +178,8 @@ JSON;
     }
 
     /**
-     * Optional per-image processing hook — runs after each image is downloaded.
-     * Empty by default (images are stored as-is).
-     *
-     * To resize / watermark / convert, install Intervention Image and fill this in:
-     *
-     *   composer require intervention/image
-     *
-     *   use Intervention\Image\ImageManager;
-     *   use Intervention\Image\Drivers\Gd\Driver;
-     *   use Illuminate\Support\Facades\Storage;
-     *
-     *   $manager = new ImageManager(new Driver());
-     *   $image   = $manager->read(Storage::disk($this->imageDisk)->path($path));
-     *   $image->scaleDown(width: 800);                 // resize
-     *   // $image->place('storage/app/watermark.png', 'bottom-right', 10, 10);
-     *   Storage::disk($this->imageDisk)->put($path, (string) $image->encodeByExtension());
+     * Optional per-image processing — runs after each download. Images are stored
+     * as-is until you uncomment the block below.
      */
     protected function processImage(?string $path): void
     {
@@ -201,7 +187,24 @@ JSON;
             return;
         }
 
-        // No-op until you add image processing (see the docblock above).
+        // Uncomment after: composer require intervention/image
+        // (move the use lines below to the top of this file when enabling)
+        // use Intervention\Image\ImageManager;
+        // use Intervention\Image\Drivers\Gd\Driver;
+        // use Illuminate\Support\Facades\Storage;
+        //
+        // $full = in_array($this->imageDisk, ['storage', 'local'], true)
+        //     ? storage_path('app/' . $path)
+        //     : Storage::disk($this->imageDisk)->path($path);
+        //
+        // if (! is_file($full)) {
+        //     return;
+        // }
+        //
+        // $manager = new ImageManager(new Driver());
+        // $image   = $manager->read($full);
+        // $image->scaleDown(width: 800);
+        // $image->save($full, quality: 85);
     }
 }
 PHP;

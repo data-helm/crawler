@@ -48,6 +48,7 @@ final class BlueprintGenerator
         private readonly JsonStructureDetector $jsonDetector = new JsonStructureDetector(),
         private readonly ApiFieldScaffolder $apiScaffolder = new ApiFieldScaffolder(),
         private readonly BotProtectionDetector $botDetector = new BotProtectionDetector(),
+        private readonly VtexDetector $vtexDetector = new VtexDetector(),
         /** @var list<string> Keywords that hint at a data endpoint (see DEFAULT_ENDPOINT_HINTS). */
         private readonly array $endpointHints = self::DEFAULT_ENDPOINT_HINTS,
     ) {
@@ -124,6 +125,27 @@ final class BlueprintGenerator
 
         $html = $this->fetchOrExplainBlock($url);
         $page = Page::fromHtml($url, $html);
+
+        // VTEX storefronts render from a known catalog API; HTML detection finds
+        // nothing and generic probing grabs the cart endpoint. Recognise the
+        // platform and emit the right endpoint + fields directly. (An explicit
+        // --api-endpoint always wins, so the user can still override.)
+        if ($apiEndpoint === null && $this->vtexDetector->looksLikeVtex($html)) {
+            return $this->buildVtexBlueprint(
+                $url,
+                $maxPages,
+                $getAllImages,
+                $getPrimaryImage,
+                $getGalleryImages,
+                $hashNames,
+                $imageDisk,
+                $httpConfig,
+                $crawlConfig,
+                $outputConfig,
+                $dedup,
+                $imageFolder,
+            );
+        }
 
         $list = $apiEndpoint === null ? $this->listDetector->detect($page) : null;
 
@@ -520,6 +542,64 @@ final class BlueprintGenerator
         }
 
         return null;
+    }
+
+    /**
+     * Build an API blueprint for a VTEX storefront: the catalog product-search
+     * endpoint (with a {search} placeholder filled per category by search_filters)
+     * plus the standard VTEX product fields. No endpoint probing — the platform's
+     * API shape is known and identical across stores.
+     */
+    private function buildVtexBlueprint(
+        string $url,
+        int $maxPages,
+        bool $getAllImages,
+        bool $getPrimaryImage,
+        bool $getGalleryImages,
+        bool $hashNames,
+        string $imageDisk,
+        HttpConfig $httpConfig,
+        CrawlConfig $crawlConfig,
+        OutputConfig $outputConfig,
+        DedupConfig $dedup,
+        ?string $imageFolder,
+    ): ScrapeBlueprint {
+        $this->notes[] = 'Detected a VTEX store — using the catalog_system product search API '
+            . '({search} is filled per category by search_filters).';
+
+        $api = new ApiConfig(
+            endpoint:      $this->vtexDetector->searchEndpoint($url),
+            method:        'GET',
+            itemsPath:     '',
+            totalPath:     null,
+            pageParam:     null,
+            pageSizeParam: null,
+            pageSize:      50,
+            startPage:     0,
+        );
+
+        $builder = BlueprintBuilder::make()
+            ->url($url)
+            ->mode(CrawlMode::API)
+            ->api($api)
+            ->itemSelector('')
+            ->maxPages($maxPages)
+            ->getAllImages($getAllImages)
+            ->getPrimaryImage($getPrimaryImage)
+            ->getGalleryImages($getGalleryImages)
+            ->hashNames($hashNames)
+            ->imageDisk($imageDisk)
+            ->imageFolder($imageFolder)
+            ->httpConfig($httpConfig)
+            ->crawlConfig($crawlConfig)
+            ->outputConfig($outputConfig)
+            ->dedup($dedup);
+
+        foreach ($this->vtexDetector->fields() as $name => $path) {
+            $builder->addField(new FieldSelector(name: $name, css: $path, type: 'json'));
+        }
+
+        return $builder->build();
     }
 
     /**
