@@ -10,6 +10,7 @@ sinks, and **LLM-ready Markdown output** (like Firecrawl / Crawl4AI).
 
 ## Installation
 
+
 ```bash
 composer require datahelm/crawler
 ```
