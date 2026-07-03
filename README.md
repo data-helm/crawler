@@ -4,6 +4,10 @@ Scrapy-style web crawler for Laravel — auto-detects lists, pagination, and fie
 supports API/SPA sites, infinite scroll, image downloading, dedup, pluggable output
 sinks, and **LLM-ready Markdown output** (like Firecrawl / Crawl4AI).
 
+📖 **Full documentation:** [datahelm.dev/guide/introduction](https://datahelm.dev/guide/introduction)
+
+![Architecture overview](https://datahelm.dev/images/architecture-overview.png)
+
 ## Installation
 
 ```bash
@@ -22,6 +26,11 @@ php artisan vendor:publish --tag=crawler-config
 php artisan datahelm:scrap:generate "https://example.com/listing" --get-detail=true --robot
 php artisan datahelm:robot:example --limit=10
 ```
+
+`datahelm:scrap:generate` auto-detects the repeating item block, pagination, and
+fields on a listing page like this:
+
+![Example listing page auto-detection](https://datahelm.dev/images/example-listing-page.png)
 
 ## Presets (field-detection heuristics)
 
