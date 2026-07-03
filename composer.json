@@ -1,0 +1,51 @@
+{
+    "name": "datahelm/crawler",
+    "version": "1.0.0",
+    "description": "Generic Scrapy-like web crawler for Laravel — auto-detects lists, pagination, fields, and supports API/SPA, infinite scroll, image downloading, dedup, resumable crawls, LLM-ready Markdown output, and pluggable output sinks.",
+    "type": "library",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Murilo Livorato",
+            "email": "murilolivorato@users.noreply.github.com"
+        }
+    ],
+    "keywords": ["crawler", "scraper", "laravel", "web-scraping", "markdown", "llm", "firecrawl"],
+    "require": {
+        "php": "^8.3",
+        "ext-dom": "*",
+        "guzzlehttp/guzzle": "^7.0",
+        "laravel/framework": "^11.0 || ^12.0 || ^13.0",
+        "symfony/dom-crawler": "^7.0 || ^8.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^11.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "DataHelm\\Crawler\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "DataHelm\\Crawler\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "DataHelm\\Crawler\\CrawlerServiceProvider"
+            ]
+        }
+    },
+    "config": {
+        "platform": {
+            "php": "8.3.0"
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "scripts": {
+        "test": "phpunit"
+    }
+}
