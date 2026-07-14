@@ -66,6 +66,8 @@ class GenerateBlueprintCommand extends Command
         {--force : Overwrite an existing robot command file}
         {--fields= : Comma-separated whitelist of field names to keep (e.g. title,link,price,image). Empty = keep all.}
         {--no-labeled-fields : Skip the labeled-fields heuristic (avoids nav labels / breadcrumbs being added as fields)}
+        {--single-page : Treat the URL as one record instead of a list (an article, a profile, a one-off page). Skips list/SPA/API detection and runs field detectors against the whole page; produces item_selector "body" with pagination disabled.}
+        {--main-content : With --single-page, scope detection to the page primary content region (like Firecrawl onlyMainContent) so nav/footer/sidebar text never becomes a field. Falls back to <body> when no region is confidently found.}
         {--resumable : Mark the blueprint as resumable (persists dedup state; use --resume on the robot to skip already-scraped items)}
         {--render-js : Set render_js=true in http_config (requires a BrowserHttpClient; see config crawler.transport)}
         {--transport= : HTTP transport to use AND bake into the blueprint (auto|guzzle|browser|flaresolverr|scraping_api). "auto" detects the protection and escalates automatically, then bakes the transport that worked. Persisted so the generated robot reuses it without -e CRAWLER_TRANSPORT.}
@@ -204,6 +206,8 @@ class GenerateBlueprintCommand extends Command
             apiItemsPath: $apiItemsPath,
             allowedFields:       $allowedFields,
             includeLabeledFields: ! (bool) $this->option('no-labeled-fields'),
+            singlePage:  (bool) $this->option('single-page'),
+            mainContent: (bool) $this->option('main-content'),
         );
 
         try {
@@ -259,10 +263,16 @@ class GenerateBlueprintCommand extends Command
         // escalation, and the run isn't tied to whatever auto picks next time).
         $resolvedTransport = $generator->resolvedTransport();
         if ($resolvedTransport !== null) {
+            // A render_js blueprint (SPA recovery re-rendered the list) always needs
+            // the browser transport, regardless of what a later unrelated fetch on
+            // the same auto client (detail page, script probing) last resolved to —
+            // otherwise the robot bakes e.g. transport=guzzle + render_js=true, which
+            // CrawlEngine can't reconcile and silently falls back to no JS rendering.
+            $transport = $blueprint->httpConfig->renderJs ? 'browser' : $resolvedTransport;
             $data = $blueprint->toArray();
-            $data['http_config']['transport'] = $resolvedTransport;
+            $data['http_config']['transport'] = $transport;
             $blueprint = ScrapeBlueprint::fromArray($data);
-            $this->line("<fg=cyan>·</> Auto-selected transport: <fg=green>{$resolvedTransport}</> (baked into the robot).");
+            $this->line("<fg=cyan>·</> Auto-selected transport: <fg=green>{$transport}</> (baked into the robot).");
         }
 
         // Bake the search filters so one robot crawls several categories at once,
@@ -291,12 +301,31 @@ class GenerateBlueprintCommand extends Command
         // --dedup for paginated listings that repeat items. Safe even when the key
         // is sometimes empty — ItemSink never drops empty-key items.
         if (! $this->option('dedup') && ! $this->option('no-dedup')) {
-            $key  = (string) ($this->option('dedup-key') ?: 'link');
-            $data = $blueprint->toArray();
+            $data  = $blueprint->toArray();
+            $names = array_column($data['fields'] ?? [], 'name');
 
-            if (! ($data['dedup']['enabled'] ?? false)
-                && in_array($key, array_column($data['fields'] ?? [], 'name'), true)
-            ) {
+            if ($this->input->hasParameterOption('--dedup-key', true)) {
+                // User named the key explicitly — honour it.
+                $key = (string) $this->option('dedup-key');
+            } else {
+                // Pick the most reliable unique key. In API mode the auto-scaffolded
+                // "link" is often a non-unique slug (a make/model page shared by many
+                // records), so a stable "id" dedups far better; HTML lists keep using
+                // "link", which there is each item's own detail URL.
+                $candidates = ($data['mode'] ?? 'html') === 'api'
+                    ? ['id', 'uuid', 'link']
+                    : ['link'];
+
+                $key = '';
+                foreach ($candidates as $candidate) {
+                    if (in_array($candidate, $names, true)) {
+                        $key = $candidate;
+                        break;
+                    }
+                }
+            }
+
+            if ($key !== '' && ! ($data['dedup']['enabled'] ?? false) && in_array($key, $names, true)) {
                 $data['dedup'] = ['enabled' => true, 'key_field' => $key];
                 $blueprint     = ScrapeBlueprint::fromArray($data);
                 $this->line("<fg=cyan>·</> Auto-enabled dedup on \"{$key}\" (pass --no-dedup to disable).");

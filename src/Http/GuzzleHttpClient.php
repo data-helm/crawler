@@ -5,6 +5,7 @@ namespace DataHelm\Crawler\Http;
 use DataHelm\Crawler\Blueprint\HttpConfig;
 use GuzzleHttp\Client;
 use GuzzleHttp\Cookie\CookieJar;
+use GuzzleHttp\Cookie\SetCookie;
 use GuzzleHttp\Exception\ConnectException;
 
 /**
@@ -24,6 +25,10 @@ final class GuzzleHttpClient implements HttpClient, HttpRequester
     private Client $client;
     private HttpConfig $config;
     private int $proxyIndex = 0;
+    private ?CookieJar $jar = null;
+
+    /** @var array<string,bool> Hosts whose domain-less cookies were already seeded. */
+    private array $cookieHosts = [];
 
     public function __construct(?HttpConfig $config = null)
     {
@@ -44,6 +49,7 @@ final class GuzzleHttpClient implements HttpClient, HttpRequester
 
     public function get(string $url): string
     {
+        $this->seedCookies($url);
         $attempt = 0;
 
         while (true) {
@@ -85,6 +91,7 @@ final class GuzzleHttpClient implements HttpClient, HttpRequester
         ?string $body = null,
         array $query = [],
     ): string {
+        $this->seedCookies($url);
         $attempt = 0;
 
         while (true) {
@@ -127,7 +134,9 @@ final class GuzzleHttpClient implements HttpClient, HttpRequester
 
     private function buildClient(): void
     {
-        $jar = $this->buildCookieJar();
+        $this->jar         = $this->config->cookies === [] ? null : new CookieJar();
+        $this->cookieHosts = [];
+        $jar               = $this->jar;
 
         $this->client = new Client([
             'timeout'         => $this->config->timeout,
@@ -164,28 +173,37 @@ final class GuzzleHttpClient implements HttpClient, HttpRequester
         return ['proxy' => $proxy];
     }
 
-    private function buildCookieJar(): ?CookieJar
+    /**
+     * Load the configured cookies into the jar for $url's host. Blueprint
+     * cookies (--cookie) usually carry no domain, and a jar entry with an empty
+     * domain matches no request host — so those cookies would silently never be
+     * sent. Instead, cookies without a domain adopt the host of the first
+     * request made to each host (idempotent per host).
+     */
+    private function seedCookies(string $url): void
     {
-        if ($this->config->cookies === []) {
-            return null;
+        if ($this->jar === null) {
+            return;
         }
 
-        $cookies = [];
+        $host = (string) (parse_url($url, PHP_URL_HOST) ?: '');
+        if ($host === '' || isset($this->cookieHosts[$host])) {
+            return;
+        }
+        $this->cookieHosts[$host] = true;
+
         foreach ($this->config->cookies as $entry) {
             if (! is_array($entry) || ! isset($entry['name'], $entry['value'])) {
                 continue;
             }
 
-            $domain = $entry['domain'] ?? '';
-            if (! isset($cookies[$domain])) {
-                $cookies[$domain] = [];
-            }
-            $cookies[$domain][$entry['name']] = $entry['value'];
+            $domain = (string) ($entry['domain'] ?? '');
+            $this->jar->setCookie(new SetCookie([
+                'Name'   => (string) $entry['name'],
+                'Value'  => (string) $entry['value'],
+                'Domain' => $domain !== '' ? $domain : $host,
+                'Path'   => '/',
+            ]));
         }
-
-        return CookieJar::fromArray(
-            array_merge(...array_values($cookies)),
-            array_key_first($cookies) ?? '',
-        );
     }
 }

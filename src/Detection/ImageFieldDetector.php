@@ -23,6 +23,13 @@ final class ImageFieldDetector implements FieldDetector
         'data-model-picture', 'data-product-picture',
     ];
 
+    /**
+     * Matches a CSS `background-image: url(...)` declaration; capture group 1
+     * is the URL (quotes optional). Used both to find candidates at detection
+     * time and, via FieldSelector::$regex, to pull the URL out at scrape time.
+     */
+    private const BACKGROUND_IMAGE_REGEX = '#background-image\s*:\s*url\((?:["\'])?([^"\')]+)(?:["\'])?\)#i';
+
     public function detect(\DOMElement $sample): ?FieldSelector
     {
         $bestElement   = null;
@@ -72,10 +79,38 @@ final class ImageFieldDetector implements FieldDetector
             }
         }
 
+        // Component libraries (Quasar, Vuetify, MUI, …) commonly render the photo
+        // as a CSS background-image instead of an <img> — e.g. Quasar's QImg. Scan
+        // every descendant's inline style for one and score it like any other URL.
+        foreach ($sample->getElementsByTagName('*') as $node) {
+            if (! $node instanceof \DOMElement) {
+                continue;
+            }
+
+            $style = $node->getAttribute('style');
+            if ($style === '' || ! preg_match(self::BACKGROUND_IMAGE_REGEX, $style, $matches)) {
+                continue;
+            }
+
+            $url = trim($matches[1]);
+            if ($url === '' || str_starts_with($url, 'data:')) {
+                continue;
+            }
+
+            $score = ImageQualityHeuristic::scoreUrl($url);
+            if ($score > $bestScore) {
+                $bestScore     = $score;
+                $bestElement   = $node;
+                $bestAttribute = 'style';
+            }
+        }
+
         if ($bestElement === null) {
             return null;
         }
 
-        return new FieldSelector('image', Selector::cssFor($bestElement), $bestAttribute);
+        $regex = $bestAttribute === 'style' ? self::BACKGROUND_IMAGE_REGEX : null;
+
+        return new FieldSelector('image', Selector::cssFor($bestElement), $bestAttribute, $regex);
     }
 }

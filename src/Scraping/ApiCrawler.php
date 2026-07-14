@@ -361,9 +361,20 @@ final class ApiCrawler
      */
     private function buildRequestParts(ApiConfig $api, int $page, string $endpoint): array
     {
-        $query = $api->query;
-        $body  = $api->body;
-        $url   = $endpoint;
+        $body = $api->body;
+
+        // Preserve any query string already on the endpoint. Guzzle's `query`
+        // request option overwrites the URI's query string wholesale, so params
+        // the API requires (sort, filters, feature flags) would be silently
+        // dropped — causing a 400, or worse, quietly wrong results — unless we
+        // lift them into the merged query array here. Precedence: the endpoint's
+        // own params, then the blueprint's api.query, then pagination params.
+        [$url, $existingQuery] = array_pad(explode('?', $endpoint, 2), 2, '');
+        $query = [];
+        if ($existingQuery !== '') {
+            parse_str($existingQuery, $query);
+        }
+        $query = array_merge($query, $api->query);
 
         // Path-based pagination: .../GetLotes/{page}/{page_size}
         if (str_contains($url, '{page}') || str_contains($url, '{page_size}')) {
@@ -387,7 +398,12 @@ final class ApiCrawler
                     $body['length'] = $api->pageSize;
                 }
             } else {
-                $query[$api->pageParam] = $page;
+                // Offset-style params advance by page size (offset=0,50,100…)
+                // rather than by ordinal page number — mirrors the DataTables
+                // start/length handling in the body branch above.
+                $query[$api->pageParam] = in_array(strtolower($api->pageParam), ['offset', 'start', 'from', 'skip'], true)
+                    ? $page * $api->pageSize
+                    : $page;
                 if ($api->pageSizeParam !== null) {
                     $query[$api->pageSizeParam] = $api->pageSize;
                 }

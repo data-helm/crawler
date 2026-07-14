@@ -30,6 +30,23 @@ final class SpaDetector
         '#["\'](/?(?:[A-Za-z0-9_\-/]*\.aspx/[A-Za-z][A-Za-z0-9_]+|(?:ApiEngine|ApiFeatures)/[A-Za-z][A-Za-z0-9_\-/]*|ajax/[A-Za-z0-9_\-/]+))["\']#i',
     ];
 
+    /**
+     * Signatures of a JS framework/build that renders content client-side.
+     * Unlike {@see SPA_MARKERS}, these don't require an empty shell — a Next.js
+     * or Gatsby page can ship plenty of static chrome yet still load its actual
+     * listing via a client-side fetch (e.g. a section that's just a spinner).
+     */
+    private const FRAMEWORK_MARKERS = [
+        '_next/static', 'self.__next_f', 'id="__next"', '__NUXT__', '__NEXT_DATA__',
+        'data-reactroot', 'ng-version', 'window.__INITIAL_STATE__', '/webpack-runtime-',
+        '___gatsby', 'data-server-rendered', 'wp-json',
+    ];
+
+    /** Loading-state markers that mean "the real content arrives via a later fetch". */
+    private const LOADING_MARKERS = [
+        'animate-spin', 'lucide-loader', 'spinner', 'skeleton-', 'data-loading',
+    ];
+
     public function isSpa(string $html, int $visibleTextLength): bool
     {
         foreach (self::SPA_MARKERS as $marker) {
@@ -42,6 +59,41 @@ final class SpaDetector
         $scriptCount = substr_count(strtolower($html), '<script');
 
         return $scriptCount >= 3 && $visibleTextLength < 800;
+    }
+
+    /**
+     * Broader than {@see isSpa()}: true when the page is built by a JS framework
+     * that may hydrate its content client-side, even if the shell carries static
+     * text. Used to decide whether it's worth rendering the page and sniffing its
+     * network traffic for a data endpoint.
+     */
+    public function looksJsRendered(string $html, int $visibleTextLength): bool
+    {
+        if ($this->isSpa($html, $visibleTextLength)) {
+            return true;
+        }
+
+        // A nearly-empty body (just a header/footer shell) that reached this
+        // check — i.e. list detection already failed — is almost certainly
+        // filled in by JavaScript, whatever the script count (e.g. a single
+        // inline XHR loader with a "Loading..." placeholder).
+        if ($visibleTextLength < 300) {
+            return true;
+        }
+
+        foreach (self::FRAMEWORK_MARKERS as $marker) {
+            if (stripos($html, $marker) !== false) {
+                return true;
+            }
+        }
+
+        foreach (self::LOADING_MARKERS as $marker) {
+            if (stripos($html, $marker) !== false) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

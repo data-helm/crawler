@@ -11,14 +11,14 @@ use DataHelm\Crawler\Blueprint\FieldSelector;
 use DataHelm\Crawler\Blueprint\HttpConfig;
 use DataHelm\Crawler\Blueprint\InfiniteScrollConfig;
 use DataHelm\Crawler\Blueprint\OutputConfig;
+use DataHelm\Crawler\Blueprint\PaginationSelector;
 use DataHelm\Crawler\Blueprint\PaginationStrategy;
 use DataHelm\Crawler\Blueprint\ScrapeBlueprint;
 use DataHelm\Crawler\Dom\Page;
+use DataHelm\Crawler\Dom\Selector;
 use DataHelm\Crawler\Dom\Url;
 use DataHelm\Crawler\Http\AutoHttpClient;
-use DataHelm\Crawler\Http\BrowserHttpClient;
 use DataHelm\Crawler\Http\CachedHttpClient;
-use DataHelm\Crawler\Http\GuzzleHttpClient;
 use DataHelm\Crawler\Http\HttpClient;
 use DataHelm\Crawler\Http\HttpRequester;
 use DataHelm\Crawler\Scraping\ItemExtractor;
@@ -87,6 +87,14 @@ final class BlueprintGenerator
     ];
 
     /**
+     * Item count at or above which a list found in the static HTML is trusted as
+     * the real listing. Below it, a JS-rendered page is rendered + network-sniffed
+     * in case the static markup was only a placeholder/decoy grid, and a data API
+     * returning at least this many records is preferred over the static list.
+     */
+    private const TRUSTED_LIST_MIN = 8;
+
+    /**
      * @param list<string> $allowedFields       When non-empty, only fields whose name
      *                                          appears in this list are kept in the blueprint.
      *                                          Useful to quickly prune unwanted auto-detected fields.
@@ -94,6 +102,11 @@ final class BlueprintGenerator
      * @param bool         $includeLabeledFields When false the LabeledFieldDetector is skipped.
      *                                          Useful for sites where the "labeled" heuristic picks
      *                                          up irrelevant text (nav labels, breadcrumbs, …).
+     * @param bool         $singlePage          Treat the URL as one record instead of a list —
+     *                                          skip list/SPA/API detection and run the field
+     *                                          detectors against the whole page.
+     * @param bool         $mainContent         With $singlePage, scope detection to the page's
+     *                                          primary content region (nav/footer excluded).
      */
     public function generate(
         string $url,
@@ -114,6 +127,8 @@ final class BlueprintGenerator
         ?string $apiItemsPath = null,
         array $allowedFields = [],
         bool $includeLabeledFields = true,
+        bool $singlePage = false,
+        bool $mainContent = false,
     ): ScrapeBlueprint {
         $this->notes               = [];
         $this->discoveredEndpoints = [];
@@ -125,6 +140,32 @@ final class BlueprintGenerator
 
         $html = $this->fetchOrExplainBlock($url);
         $page = Page::fromHtml($url, $html);
+
+        // Single-page mode: the URL is one record (an article, a profile, a
+        // one-off dashboard page), not a list. Skip list/SPA/API detection
+        // entirely — there is nothing repeating to find — and run the same
+        // field detectors directly against <body>, exactly as they would run
+        // against one list item. item_selector: "body" + pagination: none is
+        // all CrawlEngine needs; no engine changes required.
+        if ($singlePage) {
+            return $this->buildSinglePageBlueprint(
+                $url,
+                $page,
+                $getAllImages,
+                $getPrimaryImage,
+                $getGalleryImages,
+                $hashNames,
+                $imageDisk,
+                $imageFolder,
+                $httpConfig,
+                $crawlConfig,
+                $outputConfig,
+                $dedup,
+                $allowedFields,
+                $includeLabeledFields,
+                $mainContent,
+            );
+        }
 
         // VTEX storefronts render from a known catalog API; HTML detection finds
         // nothing and generic probing grabs the cart endpoint. Recognise the
@@ -161,42 +202,113 @@ final class BlueprintGenerator
             $list = null;
         }
 
-        // SPA recovery: the static HTML had no usable list and the page looks like
-        // a JS-rendered SPA. When we're on the self-escalating 'auto' transport with
-        // a headless browser available, re-fetch the page rendered (JS executed) and
-        // retry list detection before giving up to API mode. Server-rendered-on-
-        // hydrate stores (SFCC, many Next/Nuxt sites) expose their product grid only
-        // after JS runs, so this makes `--transport=auto` handle them with no manual
-        // `--render-js`. Persists render_js + the browser transport into the robot.
+        // JS-app recovery + API auto-discovery. When the static HTML gave us no
+        // list (a SPA) — or only a small, likely-placeholder one on a page built
+        // by a client-side framework — render it once in a headless browser and
+        // either (a) auto-detect the site's data API from the JSON it fetches, or
+        // (b) fall back to the rendered DOM. This makes `--transport=auto` handle
+        // Next/Nuxt/Gatsby/React sites with no manual --api-endpoint or --render-js.
+        $htmlItemCount = $list !== null ? $this->itemCount($page, $list) : 0;
+
         if (
-            $list === null
-            && $apiEndpoint === null
+            $apiEndpoint === null
             && ! $httpConfig->renderJs
+            && ($list === null || $htmlItemCount < self::TRUSTED_LIST_MIN)
             && $this->http instanceof AutoHttpClient
             && $this->http->canRenderJs()
-            && ($looksLikeSpa || $this->spaDetector->isSpa($html, $this->visibleTextLength($page)))
+            && ($looksLikeSpa || $this->spaDetector->looksJsRendered($html, $this->visibleTextLength($page)))
         ) {
+            $capture = null;
             try {
-                $renderedHtml = $this->http->fetchRendered($url);
+                $capture = $this->http->renderAndCapture($url);
                 $this->mergeTransportNotes();
+            } catch (\Throwable $e) {
+                $this->notes[] = 'Headless render/capture failed (' . $e->getMessage()
+                    . ') — falling back to static detection.';
+            }
 
-                $renderedPage = Page::fromHtml($url, $renderedHtml);
-                $renderedList = $this->listDetector->detect($renderedPage);
+            if ($capture !== null) {
+                // What the page actually renders after JS — the ground truth for
+                // "is this the content?" — plus the best re-fetchable JSON API it
+                // called. A JS page often fires several data calls (facets, a
+                // site-wide list, config), so we don't blindly trust the biggest
+                // JSON; we compare it against the rendered DOM.
+                $renderedPage = $capture['html'] !== '' ? Page::fromHtml($url, $capture['html']) : null;
+                $renderedList = $renderedPage !== null ? $this->listDetector->detect($renderedPage) : null;
+                $domReal      = $renderedList !== null
+                    && $this->looksLikeRealList($renderedPage, $renderedList, $capture['html']);
+                $domCount     = $domReal ? $this->itemCount($renderedPage, $renderedList) : 0;
 
-                if ($renderedList !== null && $this->looksLikeRealList($renderedPage, $renderedList, $renderedHtml)) {
+                $api = $this->pickBestApiResponse($capture['responses']);
+
+                // A DOM list built from CSS-in-JS hash classes (emotion/styled-
+                // components) won't match at run time — those class names change
+                // every build/render — so it can't be trusted even though it was
+                // found now. Treat it as no usable DOM list and lean on the API.
+                $domStable = $domReal && ! $this->selectorLooksUnstable($renderedList['itemSelector']);
+
+                // Use the discovered API when the DOM gives us nothing reliable to
+                // scrape, or when the API clearly represents more than the page
+                // shows (a teaser grid + a full API). Otherwise trust the stable
+                // rendered DOM — this avoids latching onto an unrelated secondary
+                // endpoint the page merely happened to call (e.g. a site-wide list
+                // on a category page whose own items load via a POST/auth call).
+                $useApi = $api !== null
+                    && $api['count'] >= self::TRUSTED_LIST_MIN
+                    && (! $domStable || $api['count'] >= $domCount * 2);
+
+                if ($useApi) {
+                    $this->notes[] = sprintf(
+                        "Auto-detected the site's data API from its network activity: %s "
+                        . '(%d records) — building an API-mode robot.',
+                        $api['endpoint'],
+                        $api['count'],
+                    );
+
+                    return $this->buildApiBlueprint(
+                        $url,
+                        $api['endpoint'],
+                        'GET',
+                        $api['itemsPath'],
+                        $api['sample'],
+                        $withDetail,
+                        $maxPages,
+                        $getAllImages,
+                        $getPrimaryImage,
+                        $getGalleryImages,
+                        $hashNames,
+                        $imageDisk,
+                        $httpConfig,
+                        $crawlConfig,
+                        $outputConfig,
+                        $dedup,
+                        $imageFolder,
+                    );
+                }
+
+                // Otherwise trust the rendered DOM (render_js baked in). When we
+                // also saw a comparable JSON API, point the user at it — an
+                // API-mode robot is faster than rendering every page in a browser.
+                if ($domReal) {
                     $this->notes[] = 'Headless re-render exposed a real content list — '
                         . 'building an HTML-mode robot (render_js baked in).';
-                    $html       = $renderedHtml;
+                    if ($api !== null) {
+                        $this->notes[] = sprintf(
+                            'The page also calls a JSON API (%s, %d records/page). If it holds the '
+                            . 'same items, re-run with --api-endpoint=%s for a faster API-mode robot.',
+                            $api['endpoint'],
+                            $api['count'],
+                            $api['endpoint'],
+                        );
+                    }
+                    $html       = $capture['html'];
                     $page       = $renderedPage;
                     $list       = $renderedList;
                     $httpConfig = $httpConfig->withRenderJs(true);
-                } else {
-                    $this->notes[] = 'Headless re-render still showed no content list — '
+                } elseif ($list === null) {
+                    $this->notes[] = 'Headless re-render showed no content list — '
                         . 'falling back to API-mode detection.';
                 }
-            } catch (\Throwable $e) {
-                $this->notes[] = 'Headless re-render failed (' . $e->getMessage()
-                    . ') — falling back to API-mode detection.';
             }
         }
 
@@ -371,6 +483,102 @@ final class BlueprintGenerator
         return $this->http instanceof AutoHttpClient ? $this->http->getResolvedTransport() : null;
     }
 
+    /**
+     * Build a one-record blueprint for --single-page: the whole page (or its main
+     * content region) is a single item. Runs the same field detectors used on a
+     * list row against <body>, with pagination disabled and dedup off.
+     *
+     * @param list<string> $allowedFields
+     */
+    private function buildSinglePageBlueprint(
+        string $url,
+        Page $page,
+        bool $getAllImages,
+        bool $getPrimaryImage,
+        bool $getGalleryImages,
+        bool $hashNames,
+        string $imageDisk,
+        ?string $imageFolder,
+        HttpConfig $httpConfig,
+        CrawlConfig $crawlConfig,
+        OutputConfig $outputConfig,
+        DedupConfig $dedup,
+        array $allowedFields,
+        bool $includeLabeledFields,
+        bool $mainContent = false,
+    ): ScrapeBlueprint {
+        $body = $page->document()->getElementsByTagName('body')->item(0);
+        if ($body === null) {
+            throw new \RuntimeException("Could not find a <body> element at {$url}.");
+        }
+
+        // --main-content: scope detection (and the item selector) to the page's
+        // primary content region so global chrome (nav links, footer text) never
+        // becomes a field. Falls back to <body> when no region is confidently
+        // found, or when its selector isn't unique on the page (a non-unique
+        // item_selector would turn one page into several items).
+        $root     = $body;
+        $selector = 'body';
+        if ($mainContent) {
+            $scoped = MainContentScope::locate($page);
+            $css    = $scoped !== null ? Selector::cssFor($scoped) : '';
+
+            if ($scoped !== null && $css !== '' && $this->matchesExactlyOne($page, $css)) {
+                $root     = $scoped;
+                $selector = $css;
+                $this->notes[] = "Main-content scope: fields detected inside '{$css}' (site chrome excluded).";
+            } else {
+                $this->notes[] = 'Main-content scope: no unique content region found — using <body>.';
+            }
+        }
+
+        $this->notes[] = 'Single-page mode: treating the whole page as one item '
+            . "(item_selector \"{$selector}\", pagination disabled) instead of detecting a repeating list.";
+
+        $fields = $this->detectFields($root, $includeLabeledFields);
+        $fields = $this->pruneFields($fields, $allowedFields);
+
+        // A whole-page record holds every image on the page, not one card
+        // thumbnail. Collect them all as an array so the image resolver picks the
+        // best real photo for primary_image (and fills all_images) instead of
+        // latching onto whatever single <img> comes first — often a tracking pixel
+        // or an icon.
+        if (isset($fields['image']) && ($getPrimaryImage || $getAllImages || $getGalleryImages)) {
+            $fields['image'] = new FieldSelector(name: 'image', css: 'img', attribute: 'src', multiple: true);
+        }
+
+        $builder = BlueprintBuilder::make()
+            ->url($url)
+            ->itemSelector($selector)
+            ->pagination(PaginationSelector::none())
+            ->getAllImages($getAllImages)
+            ->getPrimaryImage($getPrimaryImage)
+            ->getGalleryImages($getGalleryImages)
+            ->hashNames($hashNames)
+            ->imageDisk($imageDisk)
+            ->imageFolder($imageFolder)
+            ->httpConfig($httpConfig)
+            ->crawlConfig($crawlConfig)
+            ->outputConfig($outputConfig)
+            ->dedup(new DedupConfig());
+
+        foreach ($fields as $field) {
+            $builder->addField($field);
+        }
+
+        return $builder->build();
+    }
+
+    /** True when the CSS selector matches exactly one element on the page. */
+    private function matchesExactlyOne(Page $page, string $css): bool
+    {
+        try {
+            return $page->crawler()->filter($css)->count() === 1;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
     /** Fold the auto transport's escalation trace into the generator notes. */
     private function mergeTransportNotes(): void
     {
@@ -501,8 +709,9 @@ final class BlueprintGenerator
 
         // Remember what we found (even if probing them all fails) so the caller
         // can suggest them to the user instead of a bare "go find it yourself".
+        // Merge with any endpoints already discovered from network capture.
         if ($apiEndpoint === null) {
-            $this->discoveredEndpoints = $candidates;
+            $this->discoveredEndpoints = array_values(array_unique([...$this->discoveredEndpoints, ...$candidates]));
         }
 
         if ($candidates === [] && $apiEndpoint === null) {
@@ -826,7 +1035,7 @@ final class BlueprintGenerator
         $withImage = 0;
         $items->each(function (Crawler $node) use (&$withImage): void {
             try {
-                if ($node->filter('img')->count() > 0) {
+                if ($this->nodeHasImage($node)) {
                     $withImage++;
                 }
             } catch (\Throwable) {
@@ -843,12 +1052,186 @@ final class BlueprintGenerator
         return substr_count(strtolower($html), '<script') < 3;
     }
 
-    /** Length of the page's visible body text — the SPA detector's "is there content?" signal. */
+    /**
+     * True when the node carries a real photo. Component libraries (Quasar,
+     * Vuetify, MUI, …) commonly render images as a `<picture>`, a
+     * `role="img"` div, or a CSS `background-image` instead of a literal
+     * `<img>` tag (e.g. Quasar's QImg), so a plain `img` check alone
+     * false-negatives on those and misclassifies real content as nav chrome.
+     */
+    private function nodeHasImage(Crawler $node): bool
+    {
+        return $node->filter('img, picture, [role="img"], [style*="background-image"]')->count() > 0;
+    }
+
+    /**
+     * Length of the page's visible body text — the SPA detector's "is there
+     * content?" signal. Script/style/noscript bodies are stripped first:
+     * DomCrawler's text() includes them, and a single inline loader script can
+     * make an empty "Loading…" shell look like a page full of content.
+     */
     private function visibleTextLength(Page $page): int
     {
         $body = $page->crawler()->filter('body');
+        if ($body->count() === 0) {
+            return 0;
+        }
 
-        return $body->count() > 0 ? strlen(trim($body->text('', true))) : 0;
+        $html = (string) $body->html('');
+        $html = preg_replace('#<(script|style|noscript|template)\b[^>]*>.*?</\1>#is', ' ', $html) ?? $html;
+        $text = trim(preg_replace('/\s+/', ' ', strip_tags($html)) ?? '');
+
+        return strlen($text);
+    }
+
+    /**
+     * How many elements the detected list selector matches on the page — used to
+     * tell a real listing from a small placeholder/decoy grid.
+     *
+     * @param array{itemSelector:string,sample:\DOMElement} $list
+     */
+    private function itemCount(Page $page, array $list): int
+    {
+        try {
+            return $page->crawler()->filter($list['itemSelector'])->count();
+        } catch (\Throwable) {
+            return 0;
+        }
+    }
+
+    /**
+     * Choose the best data endpoint from JSON responses captured while rendering a
+     * SPA: the re-fetchable GET whose body contains the largest list of records.
+     * POST endpoints are skipped (they usually need a body/auth the run-time
+     * crawler can't reproduce from a bare blueprint).
+     *
+     * @param  list<array{url:string,method:string,body:string}>                       $responses
+     * @return array{endpoint:string,itemsPath:string,sample:array<string,mixed>,count:int}|null
+     */
+    private function pickBestApiResponse(array $responses): ?array
+    {
+        $best = null;
+
+        foreach ($responses as $response) {
+            if (strtoupper($response['method'] ?? 'GET') !== 'GET') {
+                continue;
+            }
+
+            if ($this->isDiscardableEndpoint((string) $response['url'])) {
+                continue;
+            }
+
+            $decoded = json_decode($response['body'] ?? '', true);
+            if (! is_array($decoded)) {
+                continue;
+            }
+
+            $structure = $this->jsonDetector->detect($decoded);
+            if ($structure === null || $structure['sample'] === []) {
+                continue;
+            }
+
+            $endpoint = $this->stripPageParam((string) $response['url']);
+            $this->discoveredEndpoints[] = $endpoint;
+
+            // A listing page calls many list endpoints (the offers, plus makes,
+            // colors, financing rates, … for its filters). The main content entity
+            // is the one with by far the richest records, so rank by field count
+            // first and record count only as a tie-breaker — otherwise a long, thin
+            // lookup list (128 car makes) beats the real, page-sized data (50 cars).
+            $fields = count($structure['sample']);
+            if ($best === null
+                || $fields > $best['fields']
+                || ($fields === $best['fields'] && $structure['count'] > $best['count'])
+            ) {
+                $best = [
+                    'endpoint'  => $endpoint,
+                    'itemsPath' => $structure['path'],
+                    'sample'    => $structure['sample'],
+                    'count'     => $structure['count'],
+                    'fields'    => $fields,
+                ];
+            }
+        }
+
+        if ($best !== null) {
+            unset($best['fields']); // internal ranking key
+        }
+
+        return $best;
+    }
+
+    /**
+     * True when an item selector depends on CSS-in-JS generated class names
+     * (emotion's `css-1a2b3c` / `e15r6ct20`, styled-components' `sc-…`). Such
+     * classes are content-hashed and change on every build/render, so a robot
+     * baked with them scrapes nothing on the next run — meaning a discovered API
+     * is the reliable choice for that page.
+     */
+    private function selectorLooksUnstable(string $selector): bool
+    {
+        // emotion base classes and styled-components' generated prefixes.
+        if (preg_match('/\bcss-[a-z0-9]{4,}\b/i', $selector)
+            || preg_match('/\bsc-[a-zA-Z][a-zA-Z0-9]{4,}\b/', $selector)
+        ) {
+            return true;
+        }
+
+        // emotion "label" hashes, e.g. e15r6ct20: a short letter prefix followed
+        // by a long alphanumeric run that contains digits. The digit requirement
+        // keeps ordinary words (container, overflow, …) from matching.
+        foreach (preg_split('/[.\s>+~]+/', $selector) ?: [] as $token) {
+            if ($token !== ''
+                && preg_match('/^[a-z]{1,2}[a-z0-9]{7,}$/i', $token)
+                && preg_match('/[0-9]/', $token)
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Endpoints that must never be baked into a robot even though they return a
+     * list of records: framework SSG data files (Gatsby `page-data`, Next.js
+     * `_next/data`) whose URLs are build-hashed and change on every deploy, plus
+     * web manifests. The real, stable data API is what we want instead.
+     */
+    private function isDiscardableEndpoint(string $url): bool
+    {
+        return (bool) preg_match(
+            '#(/page-data/|/_next/data/|/app-data\.json(?:$|\?)|manifest\.(?:json|webmanifest)(?:$|\?))#i',
+            $url,
+        );
+    }
+
+    /**
+     * Drop a page/offset query parameter from a captured endpoint URL so the
+     * blueprint's own pagination drives it from the first page, rather than being
+     * pinned to whichever page the browser happened to request first.
+     */
+    private function stripPageParam(string $url): string
+    {
+        $parts = parse_url($url);
+        if (! isset($parts['query']) || $parts['query'] === '') {
+            return $url;
+        }
+
+        parse_str($parts['query'], $query);
+        foreach (array_keys($query) as $key) {
+            if (preg_match('/^(page|pagina|offset|start|from)$/i', (string) $key)) {
+                unset($query[$key]);
+            }
+        }
+
+        $rebuilt = http_build_query($query);
+        $scheme  = isset($parts['scheme']) ? $parts['scheme'] . '://' : '';
+        $host    = $parts['host'] ?? '';
+        $port    = isset($parts['port']) ? ':' . $parts['port'] : '';
+        $path    = $parts['path'] ?? '';
+
+        return $scheme . $host . $port . $path . ($rebuilt !== '' ? '?' . $rebuilt : '');
     }
 
     /**
@@ -859,7 +1242,10 @@ final class BlueprintGenerator
     {
         $http = $this->http instanceof CachedHttpClient ? $this->http->getInner() : $this->http;
 
-        if ($http instanceof GuzzleHttpClient || $http instanceof BrowserHttpClient) {
+        // Same idiom as TransportFactory: every transport it builds is
+        // configurable (AutoHttpClient included — an instanceof list here would
+        // silently drop cookies/headers for transports it forgot to name).
+        if (method_exists($http, 'configure')) {
             $http->configure($config);
         }
     }
@@ -905,6 +1291,23 @@ final class BlueprintGenerator
                 'pageParam'       => null,
                 'pageSizeParam'   => null,
                 'pathPagination'  => true,
+            ];
+        }
+
+        // Offset pagination (?limit=50&offset=0): the endpoint's own query names
+        // the scheme, so respect it instead of scaffolding generic page/size
+        // params that a strictly-validating API rejects with a 400/422. The
+        // offset param itself was stripped by stripPageParam(), so it is
+        // inferred from the `limit` param that accompanies it.
+        parse_str((string) (parse_url($endpoint, PHP_URL_QUERY) ?: ''), $query);
+        if (isset($query['limit']) && (int) $query['limit'] > 0 && ! isset($query['page'])) {
+            return [
+                'endpoint'        => $endpoint,
+                'startPage'       => 0,
+                'pageSize'        => (int) $query['limit'],
+                'pageParam'       => 'offset',
+                'pageSizeParam'   => null,
+                'pathPagination'  => false,
             ];
         }
 

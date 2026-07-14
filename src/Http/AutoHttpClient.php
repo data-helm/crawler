@@ -81,6 +81,35 @@ final class AutoHttpClient implements HttpClient, HttpRequester
         return $html;
     }
 
+    /**
+     * Render $url once and return both the fully-rendered HTML and the JSON
+     * responses the page fetched — so the generator can auto-discover a SPA's
+     * data endpoint (and, failing that, fall back to the rendered DOM) from a
+     * single browser round-trip.
+     *
+     * Deliberately does NOT set {@see $resolved}: a discovered JSON API is a
+     * plain GET the run-time crawler fetches with the cheap transport, so the
+     * blueprint must not be pinned to 'browser' unless it actually renders JS.
+     *
+     * @return array{html:string, responses:list<array{url:string,method:string,body:string}>}
+     */
+    public function renderAndCapture(string $url): array
+    {
+        $client = $this->factory->make('browser', $this->config->withRenderJs(true));
+
+        if (! $client instanceof NetworkCapturingHttpClient) {
+            // Custom browser binding without capture support: still give the
+            // caller the rendered HTML so the DOM fallback path keeps working.
+            return ['html' => $client->get($url), 'responses' => []];
+        }
+
+        $result = $client->captureJsonResponses($url);
+        $this->notes[] = 'Rendered in a headless browser and captured '
+            . count($result['responses']) . ' JSON response(s) from its network activity.';
+
+        return $result;
+    }
+
     public function get(string $url): string
     {
         return $this->run($url, fn (HttpClient $client) => $client->get($url));
