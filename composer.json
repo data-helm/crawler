@@ -1,6 +1,5 @@
 {
     "name": "datahelm/crawler",
-    "version": "1.0.0",
     "description": "Generic Scrapy-like web crawler for Laravel — auto-detects lists, pagination, fields, and supports API/SPA, infinite scroll, image downloading, dedup, resumable crawls, and pluggable output sinks.",
     "type": "library",
     "license": "MIT",
