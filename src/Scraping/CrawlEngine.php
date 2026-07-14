@@ -435,8 +435,8 @@ final class CrawlEngine
 
         try {
             $page->crawler()->filter($blueprint->itemSelector)->each(
-                function (Crawler $node) use (&$items, $extractor): void {
-                    $items[] = $extractor->extract($node);
+                function (Crawler $node) use (&$items, $extractor, $page): void {
+                    $items[] = $extractor->extract($node, $page->url);
                 },
             );
         } catch (\Throwable) {
@@ -468,7 +468,7 @@ final class CrawlEngine
             return;
         }
 
-        foreach ($detailExtractor->extract($detailPage->crawler())->toArray() as $key => $value) {
+        foreach ($detailExtractor->extract($detailPage->crawler(), $detailPage->url)->toArray() as $key => $value) {
             $item->set($key, $value);
         }
     }

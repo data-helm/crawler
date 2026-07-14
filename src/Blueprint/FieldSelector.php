@@ -9,7 +9,9 @@ namespace DataHelm\Crawler\Blueprint;
  * @property-read string      $css       CSS selector relative to the context node ('' = the node itself).
  *                                        For "xpath" it holds the XPath expression; for "json" it holds
  *                                        the JSON dot-path (e.g. "lotDetails.year").
- * @property-read string      $type      Selector type: "css" (default), "xpath", or "json".
+ * @property-read string      $type      Selector type: "css" (default), "xpath", "json", or
+ *                                        "markdown" (locate with CSS, render the matched
+ *                                        element's content as clean Markdown).
  * @property-read string|null $attribute Attribute to read (null => text content).
  * @property-read string|null $regex     Optional capture pattern applied to the raw value.
  * @property-read bool        $multiple  Extract every match as an array (e.g. an image gallery).
@@ -45,7 +47,7 @@ final class FieldSelector
             regex:     $data['regex'] ?? null,
             multiple:  (bool) ($data['multiple'] ?? false),
             label:     $data['label'] ?? null,
-            type:      in_array($type, ['css', 'xpath', 'json'], true) ? $type : 'css',
+            type:      in_array($type, ['css', 'xpath', 'json', 'markdown'], true) ? $type : 'css',
         );
     }
 

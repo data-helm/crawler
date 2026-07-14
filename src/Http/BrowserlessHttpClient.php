@@ -145,9 +145,12 @@ final class BrowserlessHttpClient extends BrowserHttpClient implements NetworkCa
         ];
 
         // browserWaitFor as a CSS selector → wait for that element to appear.
+        // browserless's /content endpoint takes this as a bare "waitFor" string;
+        // an object under "waitForSelector" is rejected outright (400) before the
+        // page is even loaded.
         $waitFor = trim($this->config->browserWaitFor);
         if ($waitFor !== '' && ! $this->isWaitUntilKeyword($waitFor)) {
-            $payload['waitForSelector'] = ['selector' => $waitFor, 'timeout' => $this->config->timeout * 1000];
+            $payload['waitFor'] = $waitFor;
         }
 
         if ($this->config->userAgent !== '') {

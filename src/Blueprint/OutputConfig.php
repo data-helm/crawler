@@ -8,7 +8,8 @@ use DataHelm\Crawler\Scraping\ScrapedItem;
  * Controls how scraped items are shaped and serialised on the way out.
  *
  * format         — output format: json (pretty array), jsonl (one object per line),
- *                  or csv (comma-separated, first row = headers).
+ *                  csv (comma-separated, first row = headers), or markdown (one
+ *                  LLM-ready Markdown section per item).
  * stream         — write items to disk as they are scraped instead of buffering
  *                  all in memory. Useful for large crawls (thousands of items).
  * flatten        — collapse nested arrays: saved_images[0] → saved_images_0.
@@ -35,7 +36,7 @@ final class OutputConfig
         $format = (string) ($data['format'] ?? 'json');
 
         return new self(
-            format:        in_array($format, ['json', 'jsonl', 'csv'], true) ? $format : 'json',
+            format:        in_array($format, ['json', 'jsonl', 'csv', 'markdown'], true) ? $format : 'json',
             stream:        (bool) ($data['stream'] ?? false),
             flatten:       (bool) ($data['flatten'] ?? false),
             excludeFields: is_array($data['exclude_fields'] ?? null) ? array_values($data['exclude_fields']) : [],

@@ -52,7 +52,9 @@ class RunScrapCommand extends Command
 
         $items = $engine->crawl($blueprint, $this->progressReporter(), (int) $this->option('limit'));
 
-        $this->writeItems($items, $exporter);
+        // Honour the blueprint's output.format (json/jsonl/csv/markdown); the
+        // injected $exporter is only the fallback when no format is configured.
+        $this->writeItems($items, $exporter, $blueprint->outputConfig);
 
         return self::SUCCESS;
     }

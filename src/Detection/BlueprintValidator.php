@@ -15,7 +15,7 @@ use DataHelm\Crawler\Blueprint\ScrapeBlueprint;
  */
 final class BlueprintValidator
 {
-    private const VALID_FIELD_TYPES = ['css', 'xpath', 'json'];
+    private const VALID_FIELD_TYPES = ['css', 'xpath', 'json', 'markdown'];
     private const VALID_SCHEMA_TYPES = [
         'string', 'int', 'float', 'bool',
         'string[]', 'int[]', 'float[]',
@@ -114,7 +114,7 @@ final class BlueprintValidator
                 $this->errors[] = "{$label}: type '{$field->type}' must be one of: " . implode(', ', self::VALID_FIELD_TYPES);
             }
 
-            if ($field->css === '' && $field->type !== 'json') {
+            if ($field->css === '' && ! in_array($field->type, ['json', 'markdown'], true)) {
                 $this->warnings[] = "{$label}: css/xpath selector is empty (field will always extract null)";
             }
         }

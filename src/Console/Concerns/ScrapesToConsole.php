@@ -9,6 +9,7 @@ use DataHelm\Crawler\Output\CsvExporter;
 use DataHelm\Crawler\Output\ItemExporter;
 use DataHelm\Crawler\Output\JsonExporter;
 use DataHelm\Crawler\Output\JsonlExporter;
+use DataHelm\Crawler\Output\MarkdownExporter;
 use DataHelm\Crawler\Output\OutputSink;
 use DataHelm\Crawler\Output\StreamWriter;
 use DataHelm\Crawler\Scraping\CrawlEngine;
@@ -238,9 +239,10 @@ trait ScrapesToConsole
     protected function defaultOutputPath(string $format = 'json'): string
     {
         $ext = match ($format) {
-            'jsonl' => 'jsonl',
-            'csv'   => 'csv',
-            default => 'json',
+            'jsonl'    => 'jsonl',
+            'csv'      => 'csv',
+            'markdown' => 'md',
+            default    => 'json',
         };
 
         return storage_path('app/scrapes/' . $this->defaultScrapeName() . '.' . $ext);
@@ -274,9 +276,10 @@ trait ScrapesToConsole
     private function resolveExporter(string $format): ItemExporter
     {
         return match ($format) {
-            'jsonl' => new JsonlExporter(),
-            'csv'   => new CsvExporter(),
-            default => new JsonExporter(),
+            'jsonl'    => new JsonlExporter(),
+            'csv'      => new CsvExporter(),
+            'markdown' => new MarkdownExporter(),
+            default    => new JsonExporter(),
         };
     }
 }

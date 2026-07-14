@@ -4,6 +4,7 @@ namespace DataHelm\Crawler\Scraping;
 
 use DataHelm\Crawler\Blueprint\FieldSelector;
 use DataHelm\Crawler\Dom\LabelValue;
+use DataHelm\Crawler\Markdown\HtmlToMarkdown;
 use Symfony\Component\DomCrawler\Crawler;
 
 /**
@@ -12,6 +13,8 @@ use Symfony\Component\DomCrawler\Crawler;
  */
 final class ItemExtractor
 {
+    private ?HtmlToMarkdown $markdown = null;
+
     /**
      * @param list<FieldSelector> $fields
      */
@@ -19,7 +22,7 @@ final class ItemExtractor
     {
     }
 
-    public function extract(Crawler $context): ScrapedItem
+    public function extract(Crawler $context, ?string $pageUrl = null): ScrapedItem
     {
         $item = new ScrapedItem();
 
@@ -35,7 +38,7 @@ final class ItemExtractor
                 continue;
             }
 
-            $item->set($field->name, $this->value($context, $field));
+            $item->set($field->name, $this->value($context, $field, $pageUrl));
         }
 
         return $item;
@@ -51,7 +54,7 @@ final class ItemExtractor
         return $root !== null ? LabelValue::map($root) : [];
     }
 
-    private function value(Crawler $context, FieldSelector $field): mixed
+    private function value(Crawler $context, FieldSelector $field, ?string $pageUrl): mixed
     {
         try {
             if ($field->css === '') {
@@ -67,7 +70,7 @@ final class ItemExtractor
             }
 
             if ($field->multiple) {
-                $values = $target->each(fn (Crawler $node) => $this->readValue($node, $field));
+                $values = $target->each(fn (Crawler $node) => $this->readValue($node, $field, $pageUrl));
 
                 return array_values(array_filter(
                     $values,
@@ -75,18 +78,41 @@ final class ItemExtractor
                 ));
             }
 
-            return $this->readValue($target->first(), $field);
+            return $this->readValue($target->first(), $field, $pageUrl);
         } catch (\Throwable) {
             return $field->multiple ? [] : null;
         }
     }
 
-    private function readValue(Crawler $node, FieldSelector $field): mixed
+    private function readValue(Crawler $node, FieldSelector $field, ?string $pageUrl): mixed
     {
+        if ($field->type === 'markdown') {
+            return $this->readMarkdown($node, $pageUrl);
+        }
+
         $raw = $field->attribute !== null ? $node->attr($field->attribute) : $node->text();
         $raw = is_string($raw) ? trim($raw) : $raw;
 
         return $this->applyRegex($raw, $field);
+    }
+
+    /**
+     * Render the matched element's content as clean Markdown. Regex is not applied
+     * (it would corrupt multi-line Markdown); use type "markdown" for article
+     * bodies, descriptions, and other long-form blocks. When $pageUrl is given,
+     * relative links/images in the content are resolved against it.
+     */
+    private function readMarkdown(Crawler $node, ?string $pageUrl): ?string
+    {
+        $dom = $node->getNode(0);
+        if ($dom === null) {
+            return null;
+        }
+
+        $this->markdown ??= new HtmlToMarkdown();
+        $rendered = $this->markdown->convertElement($dom, $pageUrl);
+
+        return $rendered !== '' ? $rendered : null;
     }
 
     private function applyRegex(mixed $raw, FieldSelector $field): mixed

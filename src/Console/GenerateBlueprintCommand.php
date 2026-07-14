@@ -50,7 +50,7 @@ class GenerateBlueprintCommand extends Command
         {--http-delay= : Milliseconds to wait between page requests (default: config crawler.http.delay_ms)}
         {--http-timeout=60 : HTTP request timeout in seconds}
         {--http-retries=3 : Retry count on transient request failures}
-        {--output-format=json : Output format: json, jsonl, csv}
+        {--output-format=json : Output format: json, jsonl, csv, markdown}
         {--dedup : Force-enable deduplication (already auto-enabled when a "link" field is detected)}
         {--dedup-key=link : Field used as the dedup uniqueness key}
         {--no-dedup : Disable the automatic link-based deduplication}
