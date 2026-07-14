@@ -70,6 +70,7 @@ namespace {{NAMESPACE}};
 
 use DataHelm\Crawler\Blueprint\ScrapeBlueprint;
 use DataHelm\Crawler\Media\ImageStore;
+use DataHelm\Crawler\Output\JsonExporter;
 use DataHelm\Crawler\Scraping\CrawlEngine;
 use DataHelm\Crawler\Scraping\ScrapedItem;
 use DataHelm\Crawler\Console\Concerns\ScrapesToConsole;
@@ -122,14 +123,20 @@ JSON;
         $blueprint = ScrapeBlueprint::fromJson(self::BLUEPRINT);
 
         $hashNames = $blueprint->hashNames;
+        $format    = $blueprint->outputConfig->format;
 
         $downloadImages = ! ($this->option('no-images'));
+
+        // jsonl/csv/markdown need the full item list to shape their output, so
+        // they're buffered here and written once via writeItems() after the
+        // crawl. 'json' (the default) keeps streaming straight to disk.
+        $buffered = [];
 
         // Runs once per scraped item as it streams in (nothing buffered).
         $this->crawlEach(
             $engine,
             $blueprint,
-            function (ScrapedItem $item) use ($images, $hashNames, $downloadImages): void {
+            function (ScrapedItem $item) use ($images, $hashNames, $downloadImages, $format, &$buffered): void {
                 $imagePath = null;
 
                 if ($downloadImages) {
@@ -153,13 +160,16 @@ JSON;
                     // }
                 }
 
-                // DEFAULT — append to storage/app/scrapes/{{NAME}}.json (or --output).
-                $this->saveJson([
-                    ...$item->toArray(),
-                    'image_path' => $imagePath,
-                ]);
+                $record = [...$item->toArray(), 'image_path' => $imagePath];
 
-                // SAVE TO A MODEL — comment saveJson() above, uncomment (key matches dedup key_field):
+                if ($format === 'json') {
+                    // DEFAULT — append to storage/app/scrapes/{{NAME}}.json (or --output).
+                    $this->saveJson($record);
+                } else {
+                    $buffered[] = new ScrapedItem($record);
+                }
+
+                // SAVE TO A MODEL — replace the branch above, uncomment (key matches dedup key_field):
                 //
                 // Product::updateOrCreate(
                 //     ['{{DEDUP_KEY}}' => $item->get('{{DEDUP_KEY}}')],
@@ -173,6 +183,12 @@ JSON;
             },
             (int) $this->option('limit'),
         );
+
+        // Writes storage/app/scrapes/{{NAME}}.<ext> (or --output) using the
+        // exporter that matches output_config.format — jsonl, csv, or markdown.
+        if ($format !== 'json') {
+            $this->writeItems($buffered, new JsonExporter(), $blueprint->outputConfig);
+        }
 
         return self::SUCCESS;
     }
