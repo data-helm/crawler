@@ -10,6 +10,13 @@ use DataHelm\Crawler\Scraping\ScrapedItem;
  *
  * Used by ScrapesToConsole when output_config.stream = true.
  * Call write() for each item, then close() when done.
+ *
+ * True streaming applies to `json` and `jsonl` only. `csv` needs a header row
+ * that is the union of every item's keys, and `markdown` is one document — so
+ * emitting those row-by-row would corrupt the output (a CSV header frozen from
+ * item #1 misaligns every later row that carries different fields). For those
+ * two formats items are buffered internally and the whole document is written
+ * once at close(), via the same exporters the buffered path uses.
  */
 final class StreamWriter
 {
@@ -17,8 +24,9 @@ final class StreamWriter
     private $handle;
     private bool $ownsHandle;
     private bool $firstItem = true;
-    /** @var list<string> */
-    private array $csvHeaders = [];
+
+    /** @var list<ScrapedItem> Items held back for whole-document formats (csv, markdown). */
+    private array $buffered = [];
 
     public function __construct(
         private readonly string $destination,
@@ -47,11 +55,17 @@ final class StreamWriter
 
     public function write(ScrapedItem $item): void
     {
+        if ($this->format === 'csv' || $this->format === 'markdown') {
+            $this->buffered[] = $item;
+            $this->firstItem = false;
+
+            return;
+        }
+
         $data = $item->toArray();
 
         match ($this->format) {
             'jsonl' => $this->writeJsonl($data),
-            'csv'   => $this->writeCsv($data),
             default => $this->writeJson($data),
         };
 
@@ -60,6 +74,12 @@ final class StreamWriter
 
     public function close(): void
     {
+        if ($this->format === 'csv' || $this->format === 'markdown') {
+            $exporter = $this->format === 'csv' ? new CsvExporter() : new MarkdownExporter();
+            fwrite($this->handle, $exporter->export($this->buffered));
+            $this->buffered = [];
+        }
+
         if ($this->format === 'json') {
             fwrite($this->handle, $this->firstItem ? "]\n" : "\n]\n");
         }
@@ -83,40 +103,5 @@ final class StreamWriter
     private function writeJsonl(array $data): void
     {
         fwrite($this->handle, json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n");
-    }
-
-    private function writeCsv(array $data): void
-    {
-        if ($this->firstItem) {
-            $this->csvHeaders = array_keys($data);
-            $this->putCsvRow($this->csvHeaders);
-        }
-
-        $row = array_map(
-            fn (string $col) => isset($data[$col])
-                ? (is_array($data[$col])
-                    ? json_encode($data[$col], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
-                    : (string) $data[$col])
-                : '',
-            $this->csvHeaders,
-        );
-
-        $this->putCsvRow($row);
-    }
-
-    private function putCsvRow(array $row): void
-    {
-        $tmp = fopen('php://temp', 'r+');
-        if ($tmp === false) {
-            return;
-        }
-        fputcsv($tmp, $row);
-        rewind($tmp);
-        $line = stream_get_contents($tmp);
-        fclose($tmp);
-
-        if (is_string($line)) {
-            fwrite($this->handle, $line);
-        }
     }
 }

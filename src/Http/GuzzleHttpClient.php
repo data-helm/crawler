@@ -143,7 +143,7 @@ final class GuzzleHttpClient implements HttpClient, HttpRequester
             // Cap connection establishment so an unreachable/dead host fails fast
             // instead of hanging for the full request timeout on every attempt.
             'connect_timeout' => min(15, $this->config->timeout ?: 15),
-            'verify'          => false,
+            'verify'          => $this->config->verifyTls,
             'cookies'         => $jar ?? true,
             'allow_redirects' => ['max' => 15, 'strict' => false, 'referer' => true, 'protocols' => ['http', 'https']],
             'headers'         => array_merge(

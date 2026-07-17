@@ -35,6 +35,7 @@ final class ApiCrawler
         private readonly HttpRequester $http,
         private readonly ItemPipeline $pipeline,
         private readonly ItemImageResolver $imageResolver,
+        private readonly ?CrawlState $resumeState = null,
     ) {
     }
 
@@ -68,7 +69,10 @@ final class ApiCrawler
         $effectiveLimit = $limit > 0 ? $limit : $blueprint->crawlConfig->maxItems;
 
         $items     = [];
-        $seenKeys  = [];
+        // Pre-load previously-seen dedup keys for resumable crawls (--resume), so
+        // an API robot skips items already scraped in an earlier run — matching the
+        // HTML path (ItemSink).
+        $seenKeys  = $this->resumeState !== null ? $this->resumeState->seenKeys : [];
         $streaming = $onItem !== null && $blueprint->outputConfig->stream;
 
         // Each search_filter is a "source" (its own endpoint, tags and limit). With
@@ -281,6 +285,7 @@ final class ApiCrawler
                     }
                     if ($key !== '') {
                         $seenKeys[$key] = true;
+                        $this->resumeState?->markSeen($key);
                     }
                 }
 
@@ -295,6 +300,9 @@ final class ApiCrawler
 
                 $stats->itemsScraped++;
                 $sourceScraped++;
+                if ($this->resumeState !== null) {
+                    $this->resumeState->itemCount++;
+                }
 
                 if ($streaming) {
                     $onItem($item);
