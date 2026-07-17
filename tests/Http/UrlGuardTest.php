@@ -66,4 +66,16 @@ final class UrlGuardTest extends TestCase
         $this->expectException(\DataHelm\Crawler\Http\BlockedUrlException::class);
         $guard->assert('http://169.254.169.254/');
     }
+
+    public function test_repeated_checks_for_the_same_host_are_consistent(): void
+    {
+        // The per-host verdict is memoised; repeated calls must return the same
+        // answer (and, in practice, resolve DNS only once).
+        $guard = new UrlGuard(blockPrivateHosts: true);
+
+        $this->assertNotNull($guard->blockReason('http://127.0.0.1/a'));
+        $this->assertNotNull($guard->blockReason('http://127.0.0.1/b'));
+        $this->assertNull($guard->blockReason('http://1.1.1.1/a'));
+        $this->assertNull($guard->blockReason('http://1.1.1.1/b'));
+    }
 }

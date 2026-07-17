@@ -32,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (identical-payload guard) and the crawl stops — matching the existing API-mode
   guard. Previously, with `max_pages: 0`, it could loop until the item limit (or
   indefinitely with no `--limit`).
+- The SSRF guard now runs on **cache hits** too (the guard wraps the HTTP cache
+  instead of sitting inside it), and memoises each host's verdict so a crawl of
+  one domain resolves DNS once instead of once per URL.
 
 - **Streaming CSV / Markdown output no longer corrupts.** With
   `output_config.stream: true`, CSV output froze its header row from the first

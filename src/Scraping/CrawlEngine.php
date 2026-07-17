@@ -118,8 +118,12 @@ final class CrawlEngine
         // SSRF guard: wrap the configured base client so every fetch downstream —
         // list pages, pagination, detail pages (URLs built from scraped content),
         // and API-mode calls — passes the guard. The instanceof checks above stay
-        // on the raw client; everything below fetches through the guarded one.
-        $baseHttp  = new GuardedHttpClient($baseHttp, $this->guard ?? new UrlGuard());
+        // on the raw client; everything below fetches through the guarded one. One
+        // guard instance is shared by every wrapper so its per-host resolution
+        // cache is reused across all of them.
+        $rawHttp   = $baseHttp;
+        $guard     = $this->guard ?? new UrlGuard();
+        $baseHttp  = new GuardedHttpClient($rawHttp, $guard);
         $paginator = new Paginator($baseHttp);
 
         // API mode: delegate to the JSON crawler. It runs the same pipeline
@@ -141,11 +145,14 @@ final class CrawlEngine
         $stats = new CrawlStats();
         $this->lastStats = $stats;
 
-        // Wrap with cache layer when enabled. Always build on $baseHttp (which may
-        // be a per-blueprint transport client) — not $this->http, which is the
-        // unconfigured global default and would ignore a transport override.
+        // Wrap with cache layer when enabled. The guard goes on the OUTSIDE of the
+        // cache (Guard(Cache(raw))) so it runs on every logical fetch, including
+        // cache hits — the per-host resolution cache keeps that cheap. Build the
+        // cache on $rawHttp (which may be a per-blueprint transport client) — not
+        // $this->http, the unconfigured global default that would ignore a
+        // transport override.
         $http = $blueprint->cache->enabled
-            ? new CachedHttpClient($baseHttp, $blueprint->cache)
+            ? new GuardedHttpClient(new CachedHttpClient($rawHttp, $blueprint->cache), $guard)
             : $baseHttp;
 
         $extractor = new ItemExtractor($blueprint->fields);
@@ -554,6 +561,12 @@ final class CrawlEngine
 
     private function syncCacheStats(HttpClient $http, CrawlStats $stats): void
     {
+        // The page client is Guard(Cache(raw)) when caching is on, so peel the
+        // guard wrapper to reach the CachedHttpClient underneath.
+        if ($http instanceof GuardedHttpClient) {
+            $http = $http->getInner();
+        }
+
         if ($http instanceof CachedHttpClient) {
             $stats->cacheHits   = $http->hits();
             $stats->cacheMisses = $http->misses();
