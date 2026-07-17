@@ -17,6 +17,9 @@ namespace DataHelm\Crawler\Blueprint;
  * render_js        — use a headless browser instead of Guzzle to fetch pages.
  *                    Requires a {@see BrowserHttpClient} implementation bound in
  *                    the container (see config('crawler.transport')).
+ * verify_tls       — verify the target's TLS certificate (default true). Set to
+ *                    false only for sites with broken/self-signed certificates —
+ *                    it exposes every request (including cookies) to MITM.
  * browser_wait_for — CSS selector or keyword ('networkidle', 'domcontentloaded')
  *                    the browser waits for before capturing HTML. Only used when
  *                    render_js = true.
@@ -46,6 +49,7 @@ final class HttpConfig
         // null = use the global config('crawler.transport'). Lets each robot remember
         // the transport its target needs (e.g. flaresolverr for a Cloudflare site).
         public readonly ?string $transport = null,
+        public readonly bool $verifyTls = true,
     ) {
     }
 
@@ -73,6 +77,7 @@ final class HttpConfig
             renderJs:       $renderJs,
             browserWaitFor: $this->browserWaitFor,
             transport:      $transport ?? $this->transport,
+            verifyTls:      $this->verifyTls,
         );
     }
 
@@ -90,6 +95,7 @@ final class HttpConfig
             renderJs:         (bool) ($data['render_js'] ?? false),
             browserWaitFor:   (string) ($data['browser_wait_for'] ?? ''),
             transport:        isset($data['transport']) && $data['transport'] !== '' ? (string) $data['transport'] : null,
+            verifyTls:        (bool) ($data['verify_tls'] ?? true),
         );
     }
 
@@ -107,6 +113,7 @@ final class HttpConfig
             'render_js'         => $this->renderJs,
             'browser_wait_for'  => $this->browserWaitFor,
             'transport'         => $this->transport,
+            'verify_tls'        => $this->verifyTls,
         ];
     }
 }

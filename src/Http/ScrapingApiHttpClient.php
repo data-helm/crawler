@@ -95,7 +95,7 @@ final class ScrapingApiHttpClient implements HttpClient, HttpRequester
 
         // Managed scrapers are slow (they render + rotate proxies); give the call
         // generous headroom so we don't time out before the provider responds.
-        $client = new Client(['timeout' => max(70, $this->config->timeout), 'verify' => false]);
+        $client = new Client(['timeout' => max(70, $this->config->timeout), 'verify' => $this->config->verifyTls]);
 
         $query = array_merge(
             $this->extraParams,

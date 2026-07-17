@@ -54,9 +54,10 @@ class FileSink implements OutputSink
         }
 
         $ext = match ($this->format) {
-            'jsonl' => 'jsonl',
-            'csv'   => 'csv',
-            default => 'json',
+            'jsonl'    => 'jsonl',
+            'csv'      => 'csv',
+            'markdown' => 'md',
+            default    => 'json',
         };
 
         return rtrim($this->outputDir, '/') . '/' . $name . '.' . $ext;

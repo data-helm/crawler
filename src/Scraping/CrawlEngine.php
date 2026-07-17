@@ -109,15 +109,18 @@ final class CrawlEngine
                 . 'Falling back to Guzzle.' . PHP_EOL);
         }
 
-        // API mode: delegate to the JSON crawler.
+        // API mode: delegate to the JSON crawler. It runs the same pipeline
+        // (incl. item_schema coercion) and dedup/resume state as the HTML path.
         if ($blueprint->mode === CrawlMode::API) {
             if (! $baseHttp instanceof HttpRequester) {
                 throw new \RuntimeException('API mode requires an HttpRequester-capable HTTP client.');
             }
 
-            $apiCrawler = new ApiCrawler($baseHttp, $this->pipeline, $this->imageResolver);
+            $apiCrawler = new ApiCrawler($baseHttp, $this->buildPipeline($blueprint), $this->imageResolver, $this->resumeState);
             $result = $apiCrawler->crawl($blueprint, $onPage, $limit, $onItem);
             $this->lastStats = $apiCrawler->getLastStats();
+
+            $this->persistResumeState($blueprint);
 
             return $result;
         }
@@ -242,11 +245,7 @@ final class CrawlEngine
         $this->syncCacheStats($http, $stats);
         $stats->finish();
 
-        // Persist dedup state for resumable blueprints.
-        if (($blueprint->resumable || $this->resumeStateName !== null) && $this->resumeState !== null) {
-            $name = $this->resumeStateName ?? $stats->itemsScraped . '-run';
-            $this->resumeState->saveFor($name);
-        }
+        $this->persistResumeState($blueprint);
 
         return $sink->results();
     }
@@ -257,6 +256,17 @@ final class CrawlEngine
     }
 
     // -------------------------------------------------------------------------
+
+    /**
+     * Persist dedup state for resumable blueprints (HTML and API paths alike).
+     */
+    private function persistResumeState(ScrapeBlueprint $blueprint): void
+    {
+        if (($blueprint->resumable || $this->resumeStateName !== null) && $this->resumeState !== null) {
+            $name = $this->resumeStateName ?? ($this->lastStats?->itemsScraped ?? 0) . '-run';
+            $this->resumeState->saveFor($name);
+        }
+    }
 
     /**
      * Extract every item from one page, merge its detail page when configured,

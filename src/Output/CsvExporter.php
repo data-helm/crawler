@@ -27,7 +27,10 @@ final class CsvExporter implements ItemExporter
             return '';
         }
 
-        fputcsv($handle, $headers);
+        // Pass an explicit empty $escape: PHP 8.4 deprecates the legacy default and
+        // fputcsv already quotes fields, so no backslash escaping is wanted (this is
+        // also the RFC-4180-compliant behaviour PHP 9 will default to).
+        fputcsv($handle, $headers, escape: '');
 
         foreach ($items as $item) {
             $data = $item->toArray();
@@ -37,7 +40,7 @@ final class CsvExporter implements ItemExporter
                     : '',
                 $headers,
             );
-            fputcsv($handle, $row);
+            fputcsv($handle, $row, escape: '');
         }
 
         rewind($handle);
