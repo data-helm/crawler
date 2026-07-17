@@ -233,7 +233,7 @@ final class CrawlEngine
                 // Infinite scroll: keep fetching fragments from the configured
                 // endpoint after the first server-rendered page.
                 if (! $reachedLimit && $isInfiniteScroll) {
-                    $reachedLimit = $this->crawlInfiniteScroll($blueprint, $baseHttp, $page, $extractor, $detailExtractor, $http, $stats, $sink, $onPage);
+                    $reachedLimit = $this->crawlInfiniteScroll($blueprint, $baseHttp, $rawSupportsApi, $page, $extractor, $detailExtractor, $http, $stats, $sink, $onPage);
                 }
 
                 if ($reachedLimit) {
@@ -338,6 +338,7 @@ final class CrawlEngine
     private function crawlInfiniteScroll(
         ScrapeBlueprint $blueprint,
         HttpClient $baseHttp,
+        bool $baseSupportsApi,
         Page $firstPage,
         ItemExtractor $extractor,
         ?ItemExtractor $detailExtractor,
@@ -351,7 +352,10 @@ final class CrawlEngine
             return false;
         }
 
-        if (! $baseHttp instanceof HttpRequester) {
+        // $baseHttp is the SSRF-guarded wrapper, which always advertises
+        // HttpRequester — so test the raw transport's capability (captured before
+        // wrapping) to keep the clear "only the first page was scraped" message.
+        if (! $baseSupportsApi || ! $baseHttp instanceof HttpRequester) {
             fwrite(STDERR, 'infinite_scroll: HTTP client cannot issue custom requests; only the first page was scraped.' . PHP_EOL);
 
             return false;

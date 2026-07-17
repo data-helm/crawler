@@ -19,6 +19,14 @@ namespace DataHelm\Crawler\Http;
  *
  * The scheme check (reject anything but http/https) always runs, since a
  * non-http scheme is never a legitimate crawl target.
+ *
+ * Limitation — DNS rebinding: the guard resolves the host and validates the IP,
+ * but the HTTP client re-resolves the name when it connects. A hostile resolver
+ * that returns a public IP here and a private one at connect time can slip past.
+ * This guard raises the bar (literal private IPs, metadata addresses, and the
+ * common cases are blocked) but is not a rebinding-proof control; for hard
+ * multi-tenant isolation, pin the validated IP into the connection (e.g. cURL's
+ * resolve option) or egress-filter at the network layer.
  */
 final class UrlGuard
 {

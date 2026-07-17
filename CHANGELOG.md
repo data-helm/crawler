@@ -15,13 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   man-in-the-middle attacks. Verification can be disabled per blueprint with
   `http_config.verify_tls: false` for sites with broken/self-signed certificates.
 - **SSRF guard for outbound requests (`UrlGuard`).** Every fetch — list pages,
-  pagination, detail pages (whose URLs come from *scraped* content), and API
-  calls — now passes a guard. Non-http(s) schemes (`file://`, `gopher://`, …) are
-  always refused. Private/reserved/loopback/link-local hosts (incl. the cloud
-  metadata address `169.254.169.254`) are refused when
+  pagination, detail pages (whose URLs come from *scraped* content), image
+  downloads, and API calls — now passes a guard. Non-http(s) schemes (`file://`,
+  `gopher://`, …) are always refused. Private/reserved/loopback/link-local hosts
+  (incl. the cloud metadata address `169.254.169.254`) are refused when
   `crawler.security.block_private_hosts` is enabled (off by default; `allow_hosts`
   whitelists specific hosts). Recommended ON for multi-tenant / untrusted-blueprint
-  setups.
+  setups. Note: the guard resolves and validates the host but the client
+  re-resolves at connect time, so it is not DNS-rebinding-proof — egress-filter or
+  pin the IP for hard isolation.
 
 ### Fixed
 
