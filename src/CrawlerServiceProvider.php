@@ -16,6 +16,7 @@ use DataHelm\Crawler\Console\ValidateBlueprintCommand;
 use DataHelm\Crawler\Http\GuzzleHttpClient;
 use DataHelm\Crawler\Http\HttpClient;
 use DataHelm\Crawler\Http\TransportFactory;
+use DataHelm\Crawler\Http\UrlGuard;
 use DataHelm\Crawler\Media\ImageStore;
 use DataHelm\Crawler\Output\ItemExporter;
 use DataHelm\Crawler\Output\JsonExporter;
@@ -150,6 +151,7 @@ class CrawlerServiceProvider extends ServiceProvider
                 new ItemPipeline($this->resolveList((array) config('crawler.pipeline', []))),
                 (array) config('crawler.pipeline_registry', []),
                 $app->make(TransportFactory::class),
+                UrlGuard::fromConfig(),
             );
         });
     }

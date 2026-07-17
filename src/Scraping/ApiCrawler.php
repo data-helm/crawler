@@ -67,41 +67,35 @@ final class ApiCrawler
             : null;
 
         $effectiveLimit = $limit > 0 ? $limit : $blueprint->crawlConfig->maxItems;
+        $streaming      = $onItem !== null && $blueprint->outputConfig->stream;
 
-        $items     = [];
-        // Pre-load previously-seen dedup keys for resumable crawls (--resume), so
-        // an API robot skips items already scraped in an earlier run — matching the
-        // HTML path (ItemSink).
-        $seenKeys  = $this->resumeState !== null ? $this->resumeState->seenKeys : [];
-        $streaming = $onItem !== null && $blueprint->outputConfig->stream;
+        // One shared ItemSink drives the identical post-extraction pipeline the
+        // HTML engine uses — pipeline (incl. item_schema coercion), dedup, filters,
+        // image resolution, resume state, streaming/buffering and the global limit.
+        // A single instance across all sources shares the dedup set and item buffer,
+        // so search_filters, --limit and --resume behave exactly as in HTML mode.
+        $sink = new ItemSink(
+            $blueprint,
+            $this->pipeline,
+            $this->imageResolver,
+            $stats,
+            $effectiveLimit,
+            $streaming,
+            $streaming ? $onItem : null,
+            $this->resumeState,
+        );
 
         // Each search_filter is a "source" (its own endpoint, tags and limit). With
-        // no filters there is a single source: the endpoint as-is. Dedup, the item
-        // list and the global limit are shared across sources.
+        // no filters there is a single source: the endpoint as-is.
         foreach ($this->buildSources($blueprint, $api) as $source) {
-            $reachedGlobalLimit = $this->crawlSource(
-                $blueprint,
-                $api,
-                $source,
-                $extractor,
-                $detailExtractor,
-                $effectiveLimit,
-                $streaming,
-                $onPage,
-                $onItem,
-                $items,
-                $seenKeys,
-                $stats,
-            );
-
-            if ($reachedGlobalLimit) {
+            if ($this->crawlSource($blueprint, $api, $source, $extractor, $detailExtractor, $sink, $onPage, $stats)) {
                 break;
             }
         }
 
         $stats->finish();
 
-        return $streaming ? [] : $blueprint->outputConfig->applyToItems($items);
+        return $sink->results();
     }
 
     public function getLastStats(): ?CrawlStats
@@ -162,13 +156,11 @@ final class ApiCrawler
 
     /**
      * Crawl one source (endpoint) to exhaustion, its per-source limit, or the
-     * global limit — sharing the dedup set, item list and stats with the others.
+     * global limit — sharing the sink (dedup set, item buffer, stats) with the
+     * others.
      *
      * @param array{endpoint:string,tags:array<string,scalar>,limit:int} $source
-     * @param (callable(string):void)|null     $onPage
-     * @param (callable(ScrapedItem):void)|null $onItem
-     * @param list<ScrapedItem>  $items
-     * @param array<string,bool> $seenKeys
+     * @param (callable(string):void)|null $onPage
      *
      * @return bool True when the GLOBAL limit was reached (stop all sources).
      */
@@ -178,12 +170,8 @@ final class ApiCrawler
         array $source,
         JsonItemExtractor $extractor,
         ?JsonItemExtractor $detailExtractor,
-        int $effectiveLimit,
-        bool $streaming,
+        ItemSink $sink,
         ?callable $onPage,
-        ?callable $onItem,
-        array &$items,
-        array &$seenKeys,
         CrawlStats $stats,
     ): bool {
         $endpoint      = $source['endpoint'];
@@ -266,7 +254,8 @@ final class ApiCrawler
 
                 $item = $extractor->extract($record);
 
-                // Stamp this source's tags (e.g. category) onto every item.
+                // Stamp this source's tags (e.g. category) onto every item — done
+                // before the sink so the pipeline/dedup/filters see them too.
                 foreach ($tags as $tagKey => $tagValue) {
                     $item->set($tagKey, $tagValue);
                 }
@@ -275,47 +264,18 @@ final class ApiCrawler
                     $this->mergeDetail($item, $api->detail, $detailExtractor, $stats);
                 }
 
-                $item = $this->pipeline->process($item, $blueprint->url);
+                // Delegate the shared post-extraction pipeline to the sink. It
+                // updates stats and returns true when the GLOBAL limit is reached.
+                $scrapedBeforeItem = $stats->itemsScraped;
+                $reachedGlobalLimit = $sink->accept($item, $blueprint->url);
+                $kept = $stats->itemsScraped > $scrapedBeforeItem;
 
-                if ($blueprint->dedup->enabled) {
-                    $key = (string) $item->get($blueprint->dedup->keyField);
-                    if ($key !== '' && isset($seenKeys[$key])) {
-                        $stats->itemsDeduped++;
-                        continue;
-                    }
-                    if ($key !== '') {
-                        $seenKeys[$key] = true;
-                        $this->resumeState?->markSeen($key);
-                    }
-                }
-
-                if (! $blueprint->filters->passes($item)) {
-                    $stats->itemsFiltered++;
-                    continue;
-                }
-
-                if ($blueprint->getPrimaryImage || $blueprint->getAllImages || $blueprint->getGalleryImages) {
-                    $this->imageResolver->enrich($item, $blueprint);
-                }
-
-                $stats->itemsScraped++;
-                $sourceScraped++;
-                if ($this->resumeState !== null) {
-                    $this->resumeState->itemCount++;
-                }
-
-                if ($streaming) {
-                    $onItem($item);
-                } else {
-                    $items[] = $item;
-                }
-
-                if ($blueprint->crawlConfig->delayBetweenItemsMs > 0) {
-                    usleep($blueprint->crawlConfig->delayBetweenItemsMs * 1000);
+                if ($kept) {
+                    $sourceScraped++;
                 }
 
                 // Global cap (--limit / max_items): stop the whole crawl.
-                if ($effectiveLimit > 0 && $stats->itemsScraped >= $effectiveLimit) {
+                if ($reachedGlobalLimit) {
                     return true;
                 }
 

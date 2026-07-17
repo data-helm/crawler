@@ -220,6 +220,33 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Security — SSRF guard
+    |--------------------------------------------------------------------------
+    |
+    | A crawler follows URLs, including detail-page URLs built from SCRAPED
+    | content — so a malicious page (or an untrusted blueprint) could aim a
+    | request at cloud metadata (169.254.169.254) or an internal service
+    | (localhost:6379, 10.x, …). The UrlGuard blocks those when enabled.
+    |
+    | Non-http(s) schemes (file://, gopher://, …) are ALWAYS rejected. Private/
+    | reserved/loopback/link-local hosts are rejected only when
+    | 'block_private_hosts' is true — off by default so the common case (an
+    | operator scraping their own staging/internal host) keeps working. Turn it
+    | ON for multi-tenant / SaaS setups where blueprints or targets aren't
+    | fully trusted. 'allow_hosts' whitelists specific hosts even then.
+    |
+    */
+
+    'security' => [
+        'block_private_hosts' => (bool) env('CRAWLER_BLOCK_PRIVATE_HOSTS', false),
+        'allow_hosts'         => array_values(array_filter(array_map(
+            'trim',
+            explode(',', (string) env('CRAWLER_ALLOW_HOSTS', '')),
+        ))),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Managed scraping API (transport = 'scraping_api')
     |--------------------------------------------------------------------------
     |
