@@ -87,14 +87,19 @@ class CrawlerServiceProvider extends ServiceProvider
         $this->app->singleton(TransportFactory::class, fn (Application $app) => new TransportFactory($app));
         $this->app->bind(HttpClient::class, fn (Application $app) => $app->make(TransportFactory::class)->make());
 
+        // One shared SSRF guard: a singleton so the engine and image downloads
+        // reuse the same per-host DNS-resolution cache instead of resolving each
+        // host twice per run.
+        $this->app->singleton(UrlGuard::class, fn () => UrlGuard::fromConfig());
+
         // Image downloads always use a plain HTTP client, never the page transport:
         // images are static CDN assets, and a headless-browser/FlareSolverr
         // transport would return the browser's HTML image-viewer wrapper instead
         // of the raw bytes. The client is still SSRF-guarded, since image URLs are
         // scraped content too (e.g. a hostile page could set an image to an
         // internal/metadata address).
-        $this->app->bind(ImageStore::class, fn () => new ImageStore(
-            new GuardedHttpClient(new GuzzleHttpClient(), UrlGuard::fromConfig()),
+        $this->app->bind(ImageStore::class, fn (Application $app) => new ImageStore(
+            new GuardedHttpClient(new GuzzleHttpClient(), $app->make(UrlGuard::class)),
         ));
 
         $this->app->bind(ItemExporter::class, JsonExporter::class);
@@ -156,7 +161,7 @@ class CrawlerServiceProvider extends ServiceProvider
                 new ItemPipeline($this->resolveList((array) config('crawler.pipeline', []))),
                 (array) config('crawler.pipeline_registry', []),
                 $app->make(TransportFactory::class),
-                UrlGuard::fromConfig(),
+                $app->make(UrlGuard::class),
             );
         });
     }

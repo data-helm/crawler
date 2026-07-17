@@ -30,7 +30,7 @@ namespace DataHelm\Crawler\Http;
  */
 final class UrlGuard
 {
-    /** @var array<string,bool> Per-host verdict cache (true = has a private/reserved IP). */
+    /** @var array<string,?string> Per-host verdict cache (the offending IP, or null when clean). */
     private array $hostVerdicts = [];
 
     /**
@@ -80,8 +80,9 @@ final class UrlGuard
 
         // A crawl usually hammers one host for thousands of URLs; resolve each
         // host at most once (DNS is slow and blocking) and reuse the verdict.
-        if ($this->hasPrivateIp($host)) {
-            return "host '{$host}' resolves to a private/reserved address";
+        $privateIp = $this->privateIpFor($host);
+        if ($privateIp !== null) {
+            return "host '{$host}' resolves to a private/reserved address ({$privateIp})";
         }
 
         return null;
@@ -101,20 +102,21 @@ final class UrlGuard
     // -------------------------------------------------------------------------
 
     /**
-     * True when $host resolves to any private/reserved IP. Memoised per host so a
-     * crawl that visits one domain resolves it once, not once per URL.
+     * The first private/reserved IP $host resolves to, or null when it is clean.
+     * Memoised per host so a crawl that visits one domain resolves it once, not
+     * once per URL.
      */
-    private function hasPrivateIp(string $host): bool
+    private function privateIpFor(string $host): ?string
     {
         if (! array_key_exists($host, $this->hostVerdicts)) {
-            $private = false;
+            $found = null;
             foreach ($this->resolveIps($host) as $ip) {
                 if ($this->isPrivateIp($ip)) {
-                    $private = true;
+                    $found = $ip;
                     break;
                 }
             }
-            $this->hostVerdicts[$host] = $private;
+            $this->hostVerdicts[$host] = $found;
         }
 
         return $this->hostVerdicts[$host];

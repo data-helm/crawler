@@ -78,4 +78,13 @@ final class UrlGuardTest extends TestCase
         $this->assertNull($guard->blockReason('http://1.1.1.1/a'));
         $this->assertNull($guard->blockReason('http://1.1.1.1/b'));
     }
+
+    public function test_block_reason_names_the_offending_ip(): void
+    {
+        $guard  = new UrlGuard(blockPrivateHosts: true);
+        $reason = $guard->blockReason('http://10.0.0.5/');
+
+        $this->assertNotNull($reason);
+        $this->assertStringContainsString('10.0.0.5', $reason);
+    }
 }
