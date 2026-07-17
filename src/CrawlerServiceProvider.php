@@ -13,6 +13,7 @@ use DataHelm\Crawler\Console\GenerateBlueprintCommand;
 use DataHelm\Crawler\Console\RunScrapCommand;
 use DataHelm\Crawler\Console\ShellCommand;
 use DataHelm\Crawler\Console\ValidateBlueprintCommand;
+use DataHelm\Crawler\Http\GuardedHttpClient;
 use DataHelm\Crawler\Http\GuzzleHttpClient;
 use DataHelm\Crawler\Http\HttpClient;
 use DataHelm\Crawler\Http\TransportFactory;
@@ -89,8 +90,12 @@ class CrawlerServiceProvider extends ServiceProvider
         // Image downloads always use a plain HTTP client, never the page transport:
         // images are static CDN assets, and a headless-browser/FlareSolverr
         // transport would return the browser's HTML image-viewer wrapper instead
-        // of the raw bytes.
-        $this->app->bind(ImageStore::class, fn () => new ImageStore(new GuzzleHttpClient()));
+        // of the raw bytes. The client is still SSRF-guarded, since image URLs are
+        // scraped content too (e.g. a hostile page could set an image to an
+        // internal/metadata address).
+        $this->app->bind(ImageStore::class, fn () => new ImageStore(
+            new GuardedHttpClient(new GuzzleHttpClient(), UrlGuard::fromConfig()),
+        ));
 
         $this->app->bind(ItemExporter::class, JsonExporter::class);
 
