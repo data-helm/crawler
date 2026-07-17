@@ -11,10 +11,12 @@ use DataHelm\Crawler\Dom\Page;
 use DataHelm\Crawler\Dom\Url;
 use DataHelm\Crawler\Http\BrowserHttpClient;
 use DataHelm\Crawler\Http\CachedHttpClient;
+use DataHelm\Crawler\Http\GuardedHttpClient;
 use DataHelm\Crawler\Http\GuzzleHttpClient;
 use DataHelm\Crawler\Http\HttpClient;
 use DataHelm\Crawler\Http\HttpRequester;
 use DataHelm\Crawler\Http\TransportFactory;
+use DataHelm\Crawler\Http\UrlGuard;
 use DataHelm\Crawler\Media\ItemImageResolver;
 use DataHelm\Crawler\Pipeline\ItemPipeline;
 use DataHelm\Crawler\Pipeline\ItemProcessor;
@@ -57,6 +59,7 @@ final class CrawlEngine
         private readonly ItemPipeline $pipeline,
         private readonly array $pipelineRegistry = [],
         private readonly ?TransportFactory $transports = null,
+        private readonly ?UrlGuard $guard = null,
     ) {
         $this->imageResolver = new ItemImageResolver();
     }
@@ -88,8 +91,7 @@ final class CrawlEngine
         // transport its target needs (e.g. flaresolverr for Cloudflare) without a
         // global CRAWLER_TRANSPORT flag on every run.
         if ($blueprint->httpConfig->transport !== null && $this->transports !== null) {
-            $baseHttp  = $this->transports->make($blueprint->httpConfig->transport, $blueprint->httpConfig);
-            $paginator = new Paginator($baseHttp);
+            $baseHttp = $this->transports->make($blueprint->httpConfig->transport, $blueprint->httpConfig);
         } else {
             // Configure the base HTTP client with blueprint settings.
             $baseHttp = $this->http instanceof CachedHttpClient ? $this->http->getInner() : $this->http;
@@ -99,7 +101,6 @@ final class CrawlEngine
             if ($baseHttp instanceof BrowserHttpClient) {
                 $baseHttp->configure($blueprint->httpConfig);
             }
-            $paginator = $this->paginator;
         }
 
         // Warn when blueprint requests browser rendering but no browser client is wired.
@@ -109,10 +110,22 @@ final class CrawlEngine
                 . 'Falling back to Guzzle.' . PHP_EOL);
         }
 
+        // Whether the raw transport can issue API-mode requests, captured before
+        // wrapping (GuardedHttpClient always advertises HttpRequester, so the
+        // check below must look at the underlying client, not the wrapper).
+        $rawSupportsApi = $baseHttp instanceof HttpRequester;
+
+        // SSRF guard: wrap the configured base client so every fetch downstream —
+        // list pages, pagination, detail pages (URLs built from scraped content),
+        // and API-mode calls — passes the guard. The instanceof checks above stay
+        // on the raw client; everything below fetches through the guarded one.
+        $baseHttp  = new GuardedHttpClient($baseHttp, $this->guard ?? new UrlGuard());
+        $paginator = new Paginator($baseHttp);
+
         // API mode: delegate to the JSON crawler. It runs the same pipeline
         // (incl. item_schema coercion) and dedup/resume state as the HTML path.
         if ($blueprint->mode === CrawlMode::API) {
-            if (! $baseHttp instanceof HttpRequester) {
+            if (! $rawSupportsApi) {
                 throw new \RuntimeException('API mode requires an HttpRequester-capable HTTP client.');
             }
 
@@ -347,6 +360,8 @@ final class CrawlEngine
         $endpoint = $scroll->endpoint !== '' ? $scroll->endpoint : $blueprint->url;
         $token    = $this->scrapeToken($firstPage, $scroll);
 
+        $lastSignature = null;
+
         // First server-rendered page counts as page 1; fetch until empty or max_pages.
         for ($i = 0; PageCap::isUnlimited($blueprint->maxPages) || $i < $blueprint->maxPages - 1; $i++) {
             if ($blueprint->httpConfig->delayMs > 0) {
@@ -379,6 +394,22 @@ final class CrawlEngine
             if ($batch === [] && $scroll->stopWhenEmpty) {
                 break;
             }
+
+            // Identical-payload guard (prevents an infinite loop with maxPages=0):
+            // if a fragment is byte-identical to the previous one, the endpoint is
+            // ignoring the offset/param and returning the same rows forever — stop
+            // instead of paging into oblivion. Mirrors ApiCrawler's guard.
+            $signature = md5($raw);
+            if ($signature === $lastSignature) {
+                fwrite(STDERR, sprintf(
+                    'infinite_scroll: batch %d returned the same payload as the previous one — stopping '
+                    . '(the endpoint likely ignores the "%s" parameter).' . PHP_EOL,
+                    $i + 1,
+                    $scroll->param,
+                ));
+                break;
+            }
+            $lastSignature = $signature;
 
             foreach ($batch as $item) {
                 if ($detailExtractor !== null && $blueprint->detailLinkField !== null) {
