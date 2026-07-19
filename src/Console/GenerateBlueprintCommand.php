@@ -100,7 +100,18 @@ class GenerateBlueprintCommand extends Command
 
     public function handle(BlueprintGenerator $generator): int
     {
-        $baseUrl = Url::normalize((string) $this->argument('url'));
+        $rawUrl = trim((string) $this->argument('url'));
+        if ($rawUrl === '') {
+            $this->error(
+                'The url argument is empty or blank. When splitting the command across lines, '
+                . 'make sure no "\" has a trailing space after it — "\ " escapes the space and '
+                . 'ends the command there, so the URL never reaches artisan.',
+            );
+
+            return self::FAILURE;
+        }
+
+        $baseUrl = Url::normalize($rawUrl);
 
         // Parse --search-filters (JSON) into relative entries (url_sufix + tags).
         // They stay relative in the blueprint; the engine resolves them against the

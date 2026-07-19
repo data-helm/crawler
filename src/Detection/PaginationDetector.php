@@ -17,6 +17,7 @@ final class PaginationDetector
         '.pagination',
         '.paginacao',
         '.paginator',
+        '.paging',
         'nav .page-numbers',
     ];
 
