@@ -67,6 +67,21 @@ final class SearchFilter
             return Url::normalize($suffix);
         }
 
+        // A query-string suffix ("category=shoes", "?page=2") attaches to the
+        // base's query, not its path. A base ending in "?"/"&" opts in too.
+        $isQuery = str_starts_with($suffix, '?')
+            || str_starts_with($suffix, '&')
+            || str_ends_with($base, '?')
+            || str_ends_with($base, '&')
+            || (str_contains($suffix, '=') && ! str_contains($suffix, '/'));
+
+        if ($isQuery) {
+            $base      = rtrim($base, '?&');
+            $separator = str_contains($base, '?') ? '&' : '?';
+
+            return $base . $separator . ltrim($suffix, '?&');
+        }
+
         return rtrim($base, '/') . '/' . ltrim($suffix, '/');
     }
 

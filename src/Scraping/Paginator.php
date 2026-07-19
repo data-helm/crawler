@@ -56,7 +56,8 @@ final class Paginator
             // Fall back to just the first page.
         }
 
-        return PageCap::apply($urls, $blueprint->maxPages);
+        // Prev/next arrows duplicate the numbered links; fetch each URL once.
+        return PageCap::apply(array_values(array_unique($urls)), $blueprint->maxPages);
     }
 
     /**
