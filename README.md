@@ -440,6 +440,11 @@ defaults to "None of these" and refuses to scaffold a robot with zero detected f
   from the endpoint's own query string instead of always assuming `page`/`size`,
   which some strictly-validating APIs rejected with a 400/422.
 
+## Contributing
+
+Bug reports, feature requests, and pull requests are welcome — see
+[CONTRIBUTING.md](CONTRIBUTING.md) for how to get set up and submit a change.
+
 ## License
 
 MIT
