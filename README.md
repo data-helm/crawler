@@ -355,6 +355,8 @@ from `cookies` and merges `headers` into every call).
 | `CRAWLER_PROXY_URL` | *(empty)* | Upstream proxy for browser / flaresolverr transports |
 | `SCRAPING_API_URL` | *(empty)* | Managed scraping API base URL |
 | `SCRAPING_API_KEY` | *(empty)* | API key for `scraping_api` transport |
+| `CRAWLER_BLOCK_PRIVATE_HOSTS` | `false` | Turn on the SSRF guard's block of private/reserved/loopback/link-local hosts (see [CHANGELOG v1.0.4](CHANGELOG.md#104---2026-07-17)). Off by default so scraping your own staging/internal host keeps working; turn it **on** for multi-tenant setups or when blueprints/targets aren't fully trusted |
+| `CRAWLER_ALLOW_HOSTS` | *(empty)* | Comma-separated host whitelist that bypasses `CRAWLER_BLOCK_PRIVATE_HOSTS` for specific hosts |
 
 When Laravel runs **inside Docker** on the same network as the services, use hostnames
 `browserless` and `flaresolverr`. When Laravel runs on the **host machine**, use
