@@ -3,6 +3,7 @@
 namespace DataHelm\Crawler\Console;
 
 use DataHelm\Crawler\Blueprint\CrawlConfig;
+use DataHelm\Crawler\Blueprint\CrawlMode;
 use DataHelm\Crawler\Blueprint\DedupConfig;
 use DataHelm\Crawler\Blueprint\HttpConfig;
 use DataHelm\Crawler\Blueprint\OutputConfig;
@@ -66,10 +67,13 @@ class GenerateBlueprintCommand extends Command
         {--force : Overwrite an existing robot command file}
         {--fields= : Comma-separated whitelist of field names to keep (e.g. title,link,price,image). Empty = keep all.}
         {--no-labeled-fields : Skip the labeled-fields heuristic (avoids nav labels / breadcrumbs being added as fields)}
-        {--single-page : Treat the URL as one record instead of a list (an article, a profile, a one-off page). Skips list/SPA/API detection and runs field detectors against the whole page; produces item_selector "body" with pagination disabled.}
+        {--single-page : Treat the URL as one record instead of a list (an article, a profile, a one-off dashboard page). Skips list/SPA/API detection and runs field detectors directly against <body>; produces item_selector "body" with pagination disabled.}
         {--main-content : With --single-page, scope detection to the page primary content region (like Firecrawl onlyMainContent) so nav/footer/sidebar text never becomes a field. Falls back to <body> when no region is confidently found.}
         {--resumable : Mark the blueprint as resumable (persists dedup state; use --resume on the robot to skip already-scraped items)}
         {--render-js : Set render_js=true in http_config (requires a BrowserHttpClient; see config crawler.transport)}
+        {--browser-wait-for= : CSS selector (or keyword: networkidle, domcontentloaded, load) the headless browser waits for before capturing HTML. Implies --render-js. Essential for SPAs whose content loads after the initial render — wait for a real row, e.g. ".product-card".}
+        {--user-agent= : User-Agent header baked into http_config (default: a desktop Chrome UA)}
+        {--stream : Set output_config.stream=true — the robot writes each item to disk as it is scraped instead of buffering (large crawls)}
         {--transport= : HTTP transport to use AND bake into the blueprint (auto|guzzle|browser|flaresolverr|scraping_api). "auto" detects the protection and escalates automatically, then bakes the transport that worked. Persisted so the generated robot reuses it without -e CRAWLER_TRANSPORT.}
         {--search-filters= : JSON array of category pages to crawl with this blueprint. Each entry is an object with a url plus optional tag keys like category. URLs may be relative to the positional base URL or absolute, and each tag is stamped onto every item from that page. Detection runs on the first filter. See the README for an example.}
         {--header=* : Extra request header "Key: Value" (repeatable), baked into http_config.headers. Replay captured browser headers to reuse a session that already passed a WAF.}
@@ -95,6 +99,10 @@ class GenerateBlueprintCommand extends Command
         $transport = $this->option('transport');
         if (is_string($transport) && $transport !== '') {
             config(['crawler.transport' => $transport]);
+        } elseif (trim((string) ($this->option('browser-wait-for') ?? '')) !== '') {
+            // Waiting for a selector requires a headless browser; when no transport
+            // was chosen explicitly, pin 'browser' so detection fetches rendered.
+            config(['crawler.transport' => 'browser']);
         }
     }
 
@@ -130,20 +138,29 @@ class GenerateBlueprintCommand extends Command
             : $baseUrl;
         $name = $this->robotName($baseUrl);
 
+        $browserWaitFor = trim((string) ($this->option('browser-wait-for') ?? ''));
+        $userAgent      = trim((string) ($this->option('user-agent') ?? ''));
+
         $httpConfig = new HttpConfig(
             timeout:    (int) ($this->option('http-timeout') ?? 60),
             delayMs:    $this->configDelayMs('http-delay', 'crawler.http.delay_ms'),
             retryCount: (int) ($this->option('http-retries') ?? 3),
+            userAgent:  $userAgent !== '' ? $userAgent : HttpConfig::defaults()->userAgent,
             // Captured headers/cookies replay a browser session that already
             // passed the WAF — sent on every request (page + API) and baked in.
             headers:    $this->parseHeaders((array) $this->option('header')),
             cookies:    $this->parseCookies((string) ($this->option('cookie') ?? '')),
-            renderJs:   (bool) $this->option('render-js'),
+            // Waiting for a selector only makes sense in a headless browser, so
+            // --browser-wait-for implies render_js (detection then fetches rendered).
+            renderJs:   (bool) $this->option('render-js') || $browserWaitFor !== '',
+            browserWaitFor: $browserWaitFor,
             // Bake the transport into the blueprint so the generated robot reuses
-            // it at run time (CrawlEngine reads http_config.transport).
+            // it at run time (CrawlEngine reads http_config.transport). A wait-for
+            // selector needs the headless browser, so it pins 'browser' when no
+            // transport was chosen (mirrors initialize()).
             transport:  is_string($this->option('transport')) && $this->option('transport') !== ''
                             ? (string) $this->option('transport')
-                            : null,
+                            : ($browserWaitFor !== '' ? 'browser' : null),
         );
 
         // max_items: respect an explicit --max-items; otherwise derive a safety
@@ -173,6 +190,7 @@ class GenerateBlueprintCommand extends Command
 
         $outputConfig = new OutputConfig(
             format: (string) ($this->option('output-format') ?? 'json'),
+            stream: (bool) $this->option('stream'),
         );
 
         $dedupConfig = new DedupConfig(
@@ -246,6 +264,18 @@ class GenerateBlueprintCommand extends Command
             } catch (\Throwable $inner) {
                 $this->error("Could not build a blueprint from {$chosen}: {$inner->getMessage()}");
                 $this->line('  <fg=gray>The endpoint may need a POST body or auth header — capture the exact request in your browser\'s Network tab and pass --api-endpoint / --api-method / --api-items-path.</>');
+
+                return self::FAILURE;
+            }
+
+            // A prompt-chosen endpoint whose JSON shape couldn't be detected would
+            // scaffold a robot with zero fields — one that runs "successfully" and
+            // outputs nothing. Fail loudly instead. (An explicit --api-endpoint
+            // still yields the skeleton: there the user asked for that endpoint
+            // and gets a clear note to complete it by hand.)
+            if ($blueprint->mode === CrawlMode::API && $blueprint->fields === []) {
+                $this->error("{$chosen} did not return a recognisable list of records — not scaffolding an empty robot.");
+                $this->line('  <fg=gray>Capture the exact request in your browser\'s Network tab (Fetch/XHR) and re-run with --api-endpoint=<url> (plus --api-items-path / --api-method); that scaffolds a skeleton api block to complete by hand.</>');
 
                 return self::FAILURE;
             }
@@ -502,10 +532,14 @@ class GenerateBlueprintCommand extends Command
         $choices = array_values($endpoints);
         $choices[] = $manual;
 
+        // Default to the manual option, NOT the first endpoint: discovered
+        // candidates are unverified (the first one is often an action endpoint
+        // like add_to_cart), and a default answer must never silently commit to
+        // one — e.g. when stdin closes early and choice() falls back to it.
         $answer = $this->choice(
             'Which endpoint would you like us to build the blueprint from?',
             $choices,
-            0,
+            count($choices) - 1,
         );
 
         if ($answer === $manual) {
