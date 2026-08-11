@@ -31,10 +31,10 @@ final class SpaDetector
     ];
 
     /**
-     * Signatures of a JS framework/build that renders content client-side.
-     * Unlike {@see SPA_MARKERS}, these don't require an empty shell — a Next.js
-     * or Gatsby page can ship plenty of static chrome yet still load its actual
-     * listing via a client-side fetch (e.g. a section that's just a spinner).
+     * Client-side-framework fingerprints. Unlike {@see SPA_MARKERS}, these don't
+     * require an empty shell — a Next.js or Gatsby page can ship plenty of static
+     * chrome yet still load its actual listing via a client-side fetch (e.g. a
+     * section that's just a spinner).
      */
     private const FRAMEWORK_MARKERS = [
         '_next/static', 'self.__next_f', 'id="__next"', '__NUXT__', '__NEXT_DATA__',
@@ -62,10 +62,11 @@ final class SpaDetector
     }
 
     /**
-     * Broader than {@see isSpa()}: true when the page is built by a JS framework
-     * that may hydrate its content client-side, even if the shell carries static
-     * text. Used to decide whether it's worth rendering the page and sniffing its
-     * network traffic for a data endpoint.
+     * Broader "this page's content is rendered/fetched by JavaScript" heuristic,
+     * used to decide whether to try a headless render + network capture. Wider
+     * than {@see isSpa()}: it also fires on framework fingerprints, loading-state
+     * markers, or a nearly-empty body — cases where list detection already failed
+     * and the real content almost certainly arrives via a later fetch.
      */
     public function looksJsRendered(string $html, int $visibleTextLength): bool
     {

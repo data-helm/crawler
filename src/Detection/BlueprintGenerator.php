@@ -87,10 +87,9 @@ final class BlueprintGenerator
     ];
 
     /**
-     * Item count at or above which a list found in the static HTML is trusted as
-     * the real listing. Below it, a JS-rendered page is rendered + network-sniffed
-     * in case the static markup was only a placeholder/decoy grid, and a data API
-     * returning at least this many records is preferred over the static list.
+     * Minimum record count for a list/API to be trusted as real content (rather
+     * than a teaser grid or a lookup list). Below this, the generator prefers to
+     * headless-render + auto-discover the site's data API.
      */
     private const TRUSTED_LIST_MIN = 8;
 
@@ -339,7 +338,18 @@ final class BlueprintGenerator
                 return $apiBlueprint;
             }
 
-            if ($looksLikeSpa) {
+            // $looksLikeSpa only covers the "found a junk nav list" case. A page
+            // that never had ANY candidate list (list was null from the start)
+            // never sets it, even when the SPA heuristic independently flagged
+            // the page or real endpoint candidates were discovered while probing
+            // API mode above — without this broader check, those candidates go
+            // undiscovered by the caller and the interactive endpoint picker
+            // (GenerateBlueprintCommand::chooseSpaEndpoint) never runs.
+            if (
+                $looksLikeSpa
+                || $this->discoveredEndpoints !== []
+                || $this->spaDetector->isSpa($html, $this->visibleTextLength($page))
+            ) {
                 $suggestions = '';
                 if ($this->discoveredEndpoints !== []) {
                     // Surface hint-matching endpoints (list/search/items/…) first.
@@ -367,7 +377,9 @@ final class BlueprintGenerator
             throw new \RuntimeException(
                 "Could not detect a repeating item list at {$url}. "
                 . 'If this is a JavaScript site backed by a JSON API, pass --api-endpoint=<url> '
-                . '(and --api-items-path / --api-method) to generate an API-mode blueprint.',
+                . '(and --api-items-path / --api-method) to generate an API-mode blueprint. '
+                . 'If the URL is a single record instead of a list (an article, a profile, a '
+                . 'one-off page), pass --single-page to scrape it as one item.',
             );
         }
 
@@ -798,6 +810,89 @@ final class BlueprintGenerator
      * plus the standard VTEX product fields. No endpoint probing — the platform's
      * API shape is known and identical across stores.
      */
+    /**
+     * @param list<string> $allowedFields
+     */
+    private function buildSinglePageBlueprint(
+        string $url,
+        Page $page,
+        bool $getAllImages,
+        bool $getPrimaryImage,
+        bool $getGalleryImages,
+        bool $hashNames,
+        string $imageDisk,
+        ?string $imageFolder,
+        HttpConfig $httpConfig,
+        CrawlConfig $crawlConfig,
+        OutputConfig $outputConfig,
+        DedupConfig $dedup,
+        array $allowedFields,
+        bool $includeLabeledFields,
+        bool $mainContent = false,
+    ): ScrapeBlueprint {
+        $body = $page->document()->getElementsByTagName('body')->item(0);
+        if ($body === null) {
+            throw new \RuntimeException("Could not find a <body> element at {$url}.");
+        }
+
+        // --main-content: scope detection (and the item selector) to the page's
+        // primary content region so global chrome (nav links, footer text) never
+        // becomes a field. Falls back to <body> when no region is confidently
+        // found, or when its selector isn't unique on the page (a non-unique
+        // item_selector would turn one page into several items).
+        $root     = $body;
+        $selector = 'body';
+        if ($mainContent) {
+            $scoped = MainContentScope::locate($page);
+            $css    = $scoped !== null ? Selector::cssFor($scoped) : '';
+
+            if ($scoped !== null && $css !== '' && $this->matchesExactlyOne($page, $css)) {
+                $root     = $scoped;
+                $selector = $css;
+                $this->notes[] = "Main-content scope: fields detected inside '{$css}' (site chrome excluded).";
+            } else {
+                $this->notes[] = 'Main-content scope: no unique content region found — using <body>.';
+            }
+        }
+
+        $this->notes[] = 'Single-page mode: treating the whole page as one item '
+            . "(item_selector \"{$selector}\", pagination disabled) instead of detecting a repeating list.";
+
+        $fields = $this->detectFields($root, $includeLabeledFields);
+        $fields = $this->pruneFields($fields, $allowedFields);
+
+        $builder = BlueprintBuilder::make()
+            ->url($url)
+            ->itemSelector($selector)
+            ->pagination(PaginationSelector::none())
+            ->getAllImages($getAllImages)
+            ->getPrimaryImage($getPrimaryImage)
+            ->getGalleryImages($getGalleryImages)
+            ->hashNames($hashNames)
+            ->imageDisk($imageDisk)
+            ->imageFolder($imageFolder)
+            ->httpConfig($httpConfig)
+            ->crawlConfig($crawlConfig)
+            ->outputConfig($outputConfig)
+            ->dedup(new DedupConfig());
+
+        foreach ($fields as $field) {
+            $builder->addField($field);
+        }
+
+        return $builder->build();
+    }
+
+    /** True when the CSS selector matches exactly one element on the page. */
+    private function matchesExactlyOne(Page $page, string $css): bool
+    {
+        try {
+            return $page->crawler()->filter($css)->count() === 1;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
     private function buildVtexBlueprint(
         string $url,
         bool $withDetail,
