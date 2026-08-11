@@ -2,7 +2,8 @@
 
 Scrapy-style web crawler for Laravel — auto-detects lists, pagination, and fields;
 supports API/SPA sites, infinite scroll, image downloading, dedup, pluggable output
-sinks, and **LLM-ready Markdown output** (like Firecrawl / Crawl4AI).
+sinks, and **LLM-ready Markdown output** (like Firecrawl / Crawl4AI). Built for
+teams who need reliable, structured data extraction without hand-rolling scrapers.
 
 ## Installation
 
