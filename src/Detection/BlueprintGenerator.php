@@ -87,10 +87,9 @@ final class BlueprintGenerator
     ];
 
     /**
-     * Item count at or above which a list found in the static HTML is trusted as
-     * the real listing. Below it, a JS-rendered page is rendered + network-sniffed
-     * in case the static markup was only a placeholder/decoy grid, and a data API
-     * returning at least this many records is preferred over the static list.
+     * Minimum record count for a list/API to be trusted as real content (rather
+     * than a teaser grid or a lookup list). Below this, the generator prefers to
+     * headless-render + auto-discover the site's data API.
      */
     private const TRUSTED_LIST_MIN = 8;
 
@@ -339,7 +338,18 @@ final class BlueprintGenerator
                 return $apiBlueprint;
             }
 
-            if ($looksLikeSpa) {
+            // $looksLikeSpa only covers the "found a junk nav list" case. A page
+            // that never had ANY candidate list (list was null from the start)
+            // never sets it, even when the SPA heuristic independently flagged
+            // the page or real endpoint candidates were discovered while probing
+            // API mode above — without this broader check, those candidates go
+            // undiscovered by the caller and the interactive endpoint picker
+            // (GenerateBlueprintCommand::chooseSpaEndpoint) never runs.
+            if (
+                $looksLikeSpa
+                || $this->discoveredEndpoints !== []
+                || $this->spaDetector->isSpa($html, $this->visibleTextLength($page))
+            ) {
                 $suggestions = '';
                 if ($this->discoveredEndpoints !== []) {
                     // Surface hint-matching endpoints (list/search/items/…) first.
@@ -367,7 +377,9 @@ final class BlueprintGenerator
             throw new \RuntimeException(
                 "Could not detect a repeating item list at {$url}. "
                 . 'If this is a JavaScript site backed by a JSON API, pass --api-endpoint=<url> '
-                . '(and --api-items-path / --api-method) to generate an API-mode blueprint.',
+                . '(and --api-items-path / --api-method) to generate an API-mode blueprint. '
+                . 'If the URL is a single record instead of a list (an article, a profile, a '
+                . 'one-off page), pass --single-page to scrape it as one item.',
             );
         }
 

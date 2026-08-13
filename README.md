@@ -2,7 +2,8 @@
 
 Scrapy-style web crawler for Laravel — auto-detects lists, pagination, and fields;
 supports API/SPA sites, infinite scroll, image downloading, dedup, pluggable output
-sinks, and **LLM-ready Markdown output** (like Firecrawl / Crawl4AI).
+sinks, and **LLM-ready Markdown output** (like Firecrawl / Crawl4AI). Built for
+teams who need reliable, structured data extraction without hand-rolling scrapers.
 
 ## Installation
 
@@ -440,6 +441,11 @@ defaults to "None of these" and refuses to scaffold a robot with zero detected f
 - **Fix:** API-mode pagination now recognises offset-style APIs (`?limit=&offset=`)
   from the endpoint's own query string instead of always assuming `page`/`size`,
   which some strictly-validating APIs rejected with a 400/422.
+
+## Contributing
+
+Bug reports, feature requests, and pull requests are welcome — see
+[CONTRIBUTING.md](CONTRIBUTING.md) for how to get set up and submit a change.
 
 ## License
 
