@@ -11,6 +11,10 @@ use PHPUnit\Framework\TestCase;
  * content region in a fixed priority order and hand back null (the caller's
  * signal to fall back to <body>) whenever nothing scores highly enough or
  * every candidate lives inside page chrome.
+ *
+ * The priority order is conditional on confidence: locate() takes the first
+ * ROOT_SELECTORS match that clears bestCandidate()'s floor, and falls through
+ * to the next selector when it doesn't — both halves are covered below.
  */
 final class MainContentScopeTest extends TestCase
 {
@@ -77,20 +81,25 @@ final class MainContentScopeTest extends TestCase
         $this->assertSame('content', $found->getAttribute('id'));
     }
 
-    public function test_prefers_main_over_a_later_role_main_candidate(): void
+    public function test_prefers_main_over_a_higher_scoring_role_main_candidate(): void
     {
-        // Root selectors are tried in priority order — a <main> match must win
-        // even when a role="main" element also exists further down the page.
+        // Root selectors are tried in priority order, so a <main> that already
+        // clears the confidence floor wins outright — locate() never even looks
+        // at [role="main"]. The fixture is deliberately lopsided: <main> scores
+        // 42 while the role="main" block scores 320, so this only passes if the
+        // ROOT_SELECTORS order is honoured rather than the raw content score.
         $page = $this->page(<<<'HTML'
             <html><body>
                 <main id="primary">
-                    <h1>Primary region</h1>
-                    <p>Enough copy here to score well above the detection floor for content.</p>
-                    <a href="/a">A</a> <a href="/b">B</a>
+                    <p>Short but scoring main region.</p>
+                    <a href="/a">A</a>
                 </main>
                 <div role="main" id="secondary">
-                    <p>Some other role=main block that should be ignored since main exists.</p>
-                    <a href="/c">C</a> <a href="/d">D</a>
+                    <p>A far longer secondary block whose raw content score is much higher
+                    than the primary region above, with many more links, so that it would
+                    win outright if the priority order were not being honoured.</p>
+                    <a href="/c">C</a> <a href="/d">D</a> <a href="/e">E</a> <a href="/f">F</a>
+                    <a href="/g">G</a> <a href="/h">H</a> <a href="/i">I</a> <a href="/j">J</a>
                 </div>
             </body></html>
             HTML);
@@ -99,6 +108,28 @@ final class MainContentScopeTest extends TestCase
 
         $this->assertNotNull($found);
         $this->assertSame('primary', $found->getAttribute('id'));
+    }
+
+    public function test_skips_a_root_selector_that_scores_below_the_confidence_floor(): void
+    {
+        // The priority order is conditional on confidence, not absolute: when the
+        // higher-priority <main> scores under bestCandidate()'s floor, locate()
+        // falls through to the next selector instead of returning a weak match.
+        $page = $this->page(<<<'HTML'
+            <html><body>
+                <main id="primary">.</main>
+                <div role="main" id="secondary">
+                    <p>A confident content region with enough copy and links to clear the
+                    detection floor comfortably on its own.</p>
+                    <a href="/c">C</a> <a href="/d">D</a>
+                </div>
+            </body></html>
+            HTML);
+
+        $found = MainContentScope::locate($page);
+
+        $this->assertNotNull($found);
+        $this->assertSame('secondary', $found->getAttribute('id'));
     }
 
     public function test_ignores_a_root_selector_candidate_sitting_inside_page_chrome(): void
