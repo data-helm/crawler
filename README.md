@@ -107,6 +107,7 @@ attributes, and JSON field names:
 | `rating_hints` | CSS class fragments for star/score widgets |
 | `stock_hints` | CSS class fragments for availability/inventory |
 | `sku_hints` | CSS class / JSON key fragments for product codes (SKU, EAN, MPN, …) |
+| `endpoint_hints` | Keywords used to *rank* (never filter) candidate data/listing endpoints when generating a blueprint for a JS-rendered/SPA site — e.g. the `auctions` preset adds `lot`, `bid`, `leilao`, `lance`, … on top of the universal defaults. See `BlueprintGenerator::DEFAULT_ENDPOINT_HINTS` for the baseline every preset starts from |
 | `image_path_prefix` | A fixed URL path segment that identifies image URLs on a known platform (e.g. VTEX's `/arquivos/`); `null` = auto |
 | `list_core_fields`, `list_min_core_fields`, `list_min_success_rate`, `list_min_link_uniqueness` | Thresholds the detector uses to decide "this repeating block is really a list of items" |
 | `item_schema` | Suggested `item_schema` (type-coercion map) to carry into the generated blueprint |
